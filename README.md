@@ -55,6 +55,33 @@ chasingclaw status
 - `chasingclaw channels status`：查看渠道状态
 - `chasingclaw cron ...`：定时任务管理
 
+## Windows 一键后台启动
+
+已提供脚本：
+
+- `scripts/windows/chasingclaw-ui.bat`
+- `scripts/windows/chasingclaw-ui.ps1`
+
+使用方式（在项目根目录）：
+
+```bat
+scripts\windows\chasingclaw-ui.bat
+```
+
+可选动作：
+
+```bat
+scripts\windows\chasingclaw-ui.bat status
+scripts\windows\chasingclaw-ui.bat stop
+scripts\windows\chasingclaw-ui.bat restart
+```
+
+说明：
+
+- 默认后台启动 `chasingclaw ui --host 0.0.0.0 --port 18789`
+- PID 文件：`.runtime/chasingclaw-ui.pid`
+- 日志文件：`logs/chasingclaw-ui.out.log`、`logs/chasingclaw-ui.err.log`
+
 ## Web UI 使用（端口 18789）
 
 启动：
