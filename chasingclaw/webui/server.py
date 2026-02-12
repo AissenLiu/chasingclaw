@@ -229,11 +229,20 @@ UI_HTML = """<!doctype html>
 
 <script>
 const KEY = 'chasingclaw_webui_session_id';
-let sessionId = localStorage.getItem(KEY) || crypto.randomUUID();
+
+function createSessionId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return 'sid-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+let sessionId = localStorage.getItem(KEY) || createSessionId();
 localStorage.setItem(KEY, sessionId);
 
 const el = (id) => document.getElementById(id);
 const chatLog = el('chatLog');
+const DEFAULT_PROVIDER_OPTIONS = ['openrouter', 'openai', 'anthropic', 'deepseek', 'custom'];
 
 function formatMessageTime(value) {
   if (!value) return new Date().toLocaleTimeString();
@@ -332,25 +341,35 @@ function toggleAdvanced() {
   setAdvancedVisible(!showing);
 }
 
-async function loadConfig() {
-  const data = await api('/api/config');
+function setProviderOptions(options, selected) {
   const provider = el('provider');
   provider.innerHTML = '';
-  for (const p of data.providerOptions || []) {
+
+  for (const p of options) {
     const option = document.createElement('option');
     option.value = p;
     option.textContent = p;
     provider.appendChild(option);
   }
-  const providerValue = data.provider || '';
+
+  const providerValue = selected || options[0] || 'openrouter';
   if (![...provider.options].some((o) => o.value === providerValue) && providerValue) {
     const option = document.createElement('option');
     option.value = providerValue;
     option.textContent = providerValue;
     provider.appendChild(option);
   }
+
   provider.value = providerValue;
   updateApiBaseState();
+}
+
+async function loadConfig() {
+  const data = await api('/api/config');
+  const options = (data.providerOptions && data.providerOptions.length)
+    ? data.providerOptions
+    : DEFAULT_PROVIDER_OPTIONS;
+  setProviderOptions(options, data.provider || options[0] || 'openrouter');
 
   el('model').value = data.model || '';
   if (isCustomProvider()) {
@@ -360,7 +379,7 @@ async function loadConfig() {
   el('restrictToWorkspace').checked = !!data.restrictToWorkspace;
 
   el('webhookCallbackUrl').value = data.webhookCallbackUrl || '';
-  el('inboundWebhookUrl').value = data.inboundWebhookUrl || '';
+  el('inboundWebhookUrl').value = data.inboundWebhookUrl || (window.location.origin + '/api/webhook/request');
   el('webhookTimeoutSeconds').value = data.webhookTimeoutSeconds || 15;
   el('webhookSignKey').value = data.webhookSignKey || '';
   el('webhookSignSecret').value = data.webhookSignSecret || '';
@@ -561,7 +580,7 @@ el('sendBtn').addEventListener('click', sendChat);
 el('webhookTestBtn').addEventListener('click', testWebhook);
 el('clearChatBtn').addEventListener('click', clearChatWindow);
 el('newSessionBtn').addEventListener('click', async () => {
-  sessionId = crypto.randomUUID();
+  sessionId = createSessionId();
   localStorage.setItem(KEY, sessionId);
   setSessionInfo();
   await loadHistory();
@@ -576,12 +595,19 @@ el('cronRefreshBtn').addEventListener('click', loadCronJobs);
 el('cronList').addEventListener('click', onCronAction);
 
 (async () => {
-  setAdvancedVisible(false);
-  setSessionInfo();
-  await loadConfig();
-  await loadHistory();
-  updateCronScheduleInputs();
-  await loadCronJobs();
+  try {
+    setAdvancedVisible(false);
+    setSessionInfo();
+    await loadConfig();
+    await loadHistory();
+    updateCronScheduleInputs();
+    await loadCronJobs();
+  } catch (err) {
+    el('cfgStatus').textContent = '配置加载失败：' + (err.message || String(err));
+    // Fallback: keep provider selector/inbound callback usable even if /api/config fails.
+    setProviderOptions(DEFAULT_PROVIDER_OPTIONS, 'openrouter');
+    el('inboundWebhookUrl').value = window.location.origin + '/api/webhook/request';
+  }
 })();
 </script>
 </body>
