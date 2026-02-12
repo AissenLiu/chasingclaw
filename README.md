@@ -82,6 +82,35 @@ scripts\windows\chasingclaw-ui.bat restart
 - PID 文件：`.runtime/chasingclaw-ui.pid`
 - 日志文件：`logs/chasingclaw-ui.out.log`、`logs/chasingclaw-ui.err.log`
 
+### Windows 开机自动启动（schtasks）
+
+已提供脚本：
+
+- `scripts/windows/chasingclaw-startup-task.bat`
+- `scripts/windows/chasingclaw-startup-task.ps1`
+
+注册开机自动启动任务（默认登录触发，推荐）：
+
+```bat
+scripts\windows\chasingclaw-startup-task.bat install
+```
+
+可选参数（按需）：
+
+```bat
+:: 用 ONSTART（系统启动）触发，通常需要管理员权限
+scripts\windows\chasingclaw-startup-task.bat install -Trigger onstart
+
+:: 查看任务状态
+scripts\windows\chasingclaw-startup-task.bat status
+
+:: 立即触发一次任务
+scripts\windows\chasingclaw-startup-task.bat run
+
+:: 删除自动启动任务
+scripts\windows\chasingclaw-startup-task.bat remove
+```
+
 ## Web UI 使用（端口 18789）
 
 启动：
