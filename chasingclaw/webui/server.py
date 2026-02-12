@@ -50,10 +50,23 @@ UI_HTML = """<!doctype html>
     button.secondary { background: #475569; }
     button.teal { background: #0f766e; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .chat-log { height: 60vh; overflow-y: auto; background: #020617; border-radius: 8px; padding: 12px; border: 1px solid #1e293b; }
-    .msg { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; }
-    .user { background: #1e3a8a; }
-    .bot { background: #064e3b; }
+    .chat-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .chat-log {
+      height: 60vh; overflow-y: auto; background: #020617; border-radius: 8px;
+      padding: 12px; border: 1px solid #1e293b; display: flex; flex-direction: column; gap: 8px;
+    }
+    .chat-row { display: flex; }
+    .chat-row.user { justify-content: flex-end; }
+    .chat-row.assistant { justify-content: flex-start; }
+    .msg {
+      max-width: 82%; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap;
+      word-break: break-word; border: 1px solid transparent;
+    }
+    .msg.user { background: #1e3a8a; border-color: #1d4ed8; }
+    .msg.assistant { background: #064e3b; border-color: #047857; }
+    .msg.pending { opacity: 0.75; font-style: italic; }
+    .msg-meta { margin-top: 6px; font-size: 11px; color: #cbd5e1; opacity: 0.7; text-align: right; }
+    .inline-btn { width: auto; margin-top: 0; padding: 6px 10px; }
     .status { font-size: 12px; color: #94a3b8; margin-top: 8px; }
     .hint { font-size: 11px; color: #94a3b8; margin-top: 6px; }
     .check-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
@@ -154,7 +167,10 @@ UI_HTML = """<!doctype html>
 
     <div class="card">
       <h2>Chat</h2>
-      <div class="status" id="sessionInfo"></div>
+      <div class="chat-toolbar">
+        <div class="status" id="sessionInfo" style="margin-top:0;"></div>
+        <button id="clearChatBtn" type="button" class="secondary inline-btn">清空窗口</button>
+      </div>
       <div class="chat-log" id="chatLog"></div>
       <div class="row" style="margin-top:10px;">
         <input id="message" placeholder="输入消息，Enter发送" />
@@ -219,12 +235,36 @@ localStorage.setItem(KEY, sessionId);
 const el = (id) => document.getElementById(id);
 const chatLog = el('chatLog');
 
-function appendMessage(role, text) {
-  const div = document.createElement('div');
-  div.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
-  div.textContent = text || '';
-  chatLog.appendChild(div);
+function formatMessageTime(value) {
+  if (!value) return new Date().toLocaleTimeString();
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return new Date().toLocaleTimeString();
+  return d.toLocaleTimeString();
+}
+
+function appendMessage(role, text, options = {}) {
+  const row = document.createElement('div');
+  row.className = 'chat-row ' + (role === 'user' ? 'user' : 'assistant');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg ' + (role === 'user' ? 'user' : 'assistant');
+  if (options.pending) {
+    bubble.classList.add('pending');
+  }
+
+  const content = document.createElement('div');
+  content.textContent = text || '';
+  bubble.appendChild(content);
+
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = formatMessageTime(options.timestamp);
+  bubble.appendChild(meta);
+
+  row.appendChild(bubble);
+  chatLog.appendChild(row);
   chatLog.scrollTop = chatLog.scrollHeight;
+  return row;
 }
 
 function escapeHtml(text) {
@@ -340,7 +380,7 @@ async function loadHistory() {
   const data = await api('/api/history?sessionId=' + encodeURIComponent(sessionId));
   for (const item of data.messages || []) {
     if (item.role === 'user' || item.role === 'assistant') {
-      appendMessage(item.role === 'user' ? 'user' : 'assistant', item.content || '');
+      appendMessage(item.role === 'user' ? 'user' : 'assistant', item.content || '', { timestamp: item.timestamp });
     }
   }
 }
@@ -376,15 +416,20 @@ async function sendChat() {
   if (!message) return;
   input.value = '';
   appendMessage('user', message);
+
+  const pendingRow = appendMessage('assistant', '正在思考中...', { pending: true });
   el('chatStatus').textContent = '思考中...';
+
   try {
     const data = await api('/api/chat', {
       method: 'POST',
       body: JSON.stringify({ message, sessionId: sessionId })
     });
+    pendingRow.remove();
     appendMessage('assistant', data.reply || '');
     el('chatStatus').textContent = '';
   } catch (err) {
+    pendingRow.remove();
     appendMessage('assistant', 'Error: ' + err.message);
     el('chatStatus').textContent = '发送失败';
   }
@@ -393,18 +438,21 @@ async function sendChat() {
 async function testWebhook() {
   const input = el('message');
   const message = (input.value || 'chasingclaw 智慧财信联通测试').trim();
+  const pendingRow = appendMessage('assistant', '正在发送智慧财信测试消息...', { pending: true });
   el('chatStatus').textContent = '正在向智慧财信机器人发送测试消息...';
   try {
     const data = await api('/api/webhook/zhcx-test-send', {
       method: 'POST',
       body: JSON.stringify({ message }),
     });
+    pendingRow.remove();
     appendMessage('assistant', '[智慧财信测试] 已发送：' + message);
     if (data.result) {
       appendMessage('assistant', '[智慧财信测试返回] ' + JSON.stringify(data.result));
     }
     el('chatStatus').textContent = '智慧财信测试发送完成';
   } catch (err) {
+    pendingRow.remove();
     appendMessage('assistant', '智慧财信测试失败: ' + err.message);
     el('chatStatus').textContent = '智慧财信测试失败';
   }
@@ -421,6 +469,11 @@ function scheduleText(job) {
   if (job.scheduleKind === 'cron') return job.cronExpr || '';
   if (job.scheduleKind === 'at') return job.atIso || '';
   return '';
+}
+
+function clearChatWindow() {
+  chatLog.innerHTML = '';
+  el('chatStatus').textContent = '';
 }
 
 async function loadCronJobs() {
@@ -506,6 +559,7 @@ el('advancedToggleBtn').addEventListener('click', toggleAdvanced);
 el('webhookMessageType').addEventListener('change', updateWebhookMessageTypeState);
 el('sendBtn').addEventListener('click', sendChat);
 el('webhookTestBtn').addEventListener('click', testWebhook);
+el('clearChatBtn').addEventListener('click', clearChatWindow);
 el('newSessionBtn').addEventListener('click', async () => {
   sessionId = crypto.randomUUID();
   localStorage.setItem(KEY, sessionId);
