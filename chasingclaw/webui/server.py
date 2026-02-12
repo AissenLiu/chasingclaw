@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import hashlib
 import json
 import os
 import secrets
 import socket
 import threading
 import webbrowser
+from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -31,32 +34,46 @@ UI_HTML = """<!doctype html>
   <title>chasingclaw UI</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 420px 1fr; gap: 16px; }
     .card { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 14px; }
     h1 { margin: 0 0 8px; font-size: 20px; }
     h2 { margin: 0 0 10px; font-size: 15px; }
+    h3 { margin: 12px 0 8px; font-size: 13px; color: #93c5fd; }
     label { display: block; margin: 10px 0 5px; font-size: 12px; color: #94a3b8; }
     input, select, textarea, button {
       width: 100%; box-sizing: border-box; border-radius: 8px; border: 1px solid #334155;
       background: #0b1220; color: #e2e8f0; padding: 10px; font-size: 13px;
     }
+    textarea { min-height: 72px; resize: vertical; }
     button { background: #2563eb; border: 0; cursor: pointer; font-weight: 600; margin-top: 8px; }
     button:hover { background: #1d4ed8; }
+    button.secondary { background: #475569; }
+    button.teal { background: #0f766e; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .chat-log { height: 70vh; overflow-y: auto; background: #020617; border-radius: 8px; padding: 12px; border: 1px solid #1e293b; }
+    .chat-log { height: 60vh; overflow-y: auto; background: #020617; border-radius: 8px; padding: 12px; border: 1px solid #1e293b; }
     .msg { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; }
     .user { background: #1e3a8a; }
     .bot { background: #064e3b; }
     .status { font-size: 12px; color: #94a3b8; margin-top: 8px; }
     .hint { font-size: 11px; color: #94a3b8; margin-top: 6px; }
+    .check-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .check-row input { width: auto; }
+    .cron-list { margin-top: 10px; border: 1px solid #1e293b; border-radius: 8px; overflow: hidden; }
+    .cron-head, .cron-item { display: grid; grid-template-columns: 0.9fr 1fr 1fr 1.8fr; gap: 8px; padding: 8px 10px; align-items: center; }
+    .cron-head { background: #0b1220; font-size: 12px; color: #94a3b8; }
+    .cron-item { border-top: 1px solid #1e293b; font-size: 12px; }
+    .cron-actions { display: flex; gap: 6px; }
+    .cron-actions button { margin-top: 0; padding: 6px 8px; font-size: 12px; }
+    @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <h1>chasingclaw</h1>
-      <h2>模型与Webhook配置</h2>
+      <h2>模型 / Webhook / 运行配置</h2>
 
+      <h3>模型配置</h3>
       <label>Provider</label>
       <select id="provider"></select>
 
@@ -69,11 +86,63 @@ UI_HTML = """<!doctype html>
       <label>API Key</label>
       <input id="apiKey" type="password" placeholder="输入后点击保存" />
 
+      <h3>运行配置</h3>
+      <div class="check-row">
+        <input id="restrictToWorkspace" type="checkbox" />
+        <label for="restrictToWorkspace" style="margin:0;">Restrict tools to workspace</label>
+      </div>
+
+      <h3>智慧财信Webhook配置</h3>
       <label>智慧财信机器人webhook地址</label>
       <input id="webhookCallbackUrl" placeholder="例如 https://your-im-server/webhook" />
 
       <label>用于配置智慧财信机器人的webhook回调地址</label>
       <input id="inboundWebhookUrl" readonly />
+
+      <div class="row">
+        <div>
+          <label>Webhook Timeout (秒)</label>
+          <input id="webhookTimeoutSeconds" type="number" min="1" step="1" />
+        </div>
+        <div>
+          <label>回复消息类型</label>
+          <select id="webhookMessageType">
+            <option value="text">text</option>
+            <option value="markdown">markdown</option>
+            <option value="link">link</option>
+          </select>
+        </div>
+      </div>
+
+      <label>消息模板（支持 {reply} 占位符）</label>
+      <textarea id="webhookMessageTemplate" placeholder="默认: {reply}"></textarea>
+
+      <div class="row">
+        <div>
+          <label>link.title</label>
+          <input id="webhookLinkTitle" placeholder="chasingclaw 回复" />
+        </div>
+        <div>
+          <label>link.btnTitle</label>
+          <input id="webhookLinkButtonTitle" placeholder="查看详情" />
+        </div>
+      </div>
+
+      <label>link.messageUrl（可选）</label>
+      <input id="webhookLinkMessageUrl" placeholder="例如 https://your-site/details" />
+
+      <h3>签名配置（可选）</h3>
+      <div class="row">
+        <div>
+          <label>签名 key</label>
+          <input id="webhookSignKey" placeholder="Authorization 的 key" />
+        </div>
+        <div>
+          <label>签名 secret</label>
+          <input id="webhookSignSecret" type="password" placeholder="Authorization 签名 secret" />
+        </div>
+      </div>
+      <div class="hint">配置后将自动携带 Content-Md5 / Content-Type / DATE / Authorization 请求头。</div>
 
       <button id="saveBtn">保存配置</button>
       <div class="status" id="cfgStatus"></div>
@@ -88,10 +157,53 @@ UI_HTML = """<!doctype html>
         <button id="sendBtn">发送</button>
       </div>
       <div class="row" style="margin-top:8px;">
-        <button id="newSessionBtn" style="background:#475569">新会话</button>
-        <button id="webhookTestBtn" style="background:#0f766e">测试智慧财信发送</button>
+        <button id="newSessionBtn" class="secondary">新会话</button>
+        <button id="webhookTestBtn" class="teal">测试智慧财信发送</button>
       </div>
       <div class="status" id="chatStatus"></div>
+    </div>
+
+    <div class="card">
+      <h2>Cron 定时任务</h2>
+      <div class="row">
+        <div>
+          <label>任务名称</label>
+          <input id="cronName" placeholder="例如 每日巡检" />
+        </div>
+        <div>
+          <label>计划类型</label>
+          <select id="cronScheduleType">
+            <option value="every">every（每隔秒）</option>
+            <option value="cron">cron 表达式</option>
+            <option value="at">at（一次性）</option>
+          </select>
+        </div>
+      </div>
+
+      <label>任务消息（交给 AI 执行）</label>
+      <textarea id="cronMessage" placeholder="例如 请总结今天项目进展"></textarea>
+
+      <div class="row">
+        <div>
+          <label>every 秒数</label>
+          <input id="cronEverySeconds" type="number" min="1" step="1" value="3600" />
+        </div>
+        <div>
+          <label>cron 表达式</label>
+          <input id="cronExpr" placeholder="例如 0 9 * * *" />
+        </div>
+      </div>
+
+      <label>at 时间（本地时间）</label>
+      <input id="cronAt" type="datetime-local" />
+
+      <div class="row" style="margin-top:8px;">
+        <button id="cronAddBtn">新增任务</button>
+        <button id="cronRefreshBtn" class="secondary">刷新列表</button>
+      </div>
+
+      <div class="status" id="cronStatus"></div>
+      <div class="cron-list" id="cronList"></div>
     </div>
   </div>
 
@@ -109,6 +221,15 @@ function appendMessage(role, text) {
   div.textContent = text || '';
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 async function api(path, options = {}) {
@@ -142,6 +263,20 @@ function updateApiBaseState() {
   }
 }
 
+function updateWebhookMessageTypeState() {
+  const isLink = el('webhookMessageType').value === 'link';
+  el('webhookLinkTitle').disabled = !isLink;
+  el('webhookLinkMessageUrl').disabled = !isLink;
+  el('webhookLinkButtonTitle').disabled = !isLink;
+}
+
+function updateCronScheduleInputs() {
+  const scheduleType = el('cronScheduleType').value;
+  el('cronEverySeconds').disabled = scheduleType !== 'every';
+  el('cronExpr').disabled = scheduleType !== 'cron';
+  el('cronAt').disabled = scheduleType !== 'at';
+}
+
 async function loadConfig() {
   const data = await api('/api/config');
   const provider = el('provider');
@@ -161,13 +296,27 @@ async function loadConfig() {
   }
   provider.value = providerValue;
   updateApiBaseState();
+
   el('model').value = data.model || '';
   if (isCustomProvider()) {
     el('apiBase').value = data.apiBase || '';
   }
   el('apiKey').value = data.apiKey || '';
+  el('restrictToWorkspace').checked = !!data.restrictToWorkspace;
+
   el('webhookCallbackUrl').value = data.webhookCallbackUrl || '';
   el('inboundWebhookUrl').value = data.inboundWebhookUrl || '';
+  el('webhookTimeoutSeconds').value = data.webhookTimeoutSeconds || 15;
+  el('webhookSignKey').value = data.webhookSignKey || '';
+  el('webhookSignSecret').value = data.webhookSignSecret || '';
+
+  el('webhookMessageType').value = data.webhookMessageType || 'text';
+  el('webhookMessageTemplate').value = data.webhookMessageTemplate || '{reply}';
+  el('webhookLinkTitle').value = data.webhookLinkTitle || 'chasingclaw 回复';
+  el('webhookLinkMessageUrl').value = data.webhookLinkMessageUrl || '';
+  el('webhookLinkButtonTitle').value = data.webhookLinkButtonTitle || '查看详情';
+  updateWebhookMessageTypeState();
+
   el('cfgStatus').textContent = '配置已加载';
 }
 
@@ -188,7 +337,16 @@ async function saveConfig() {
     model: el('model').value,
     apiKey: el('apiKey').value,
     apiBase: isCustomProvider() ? el('apiBase').value : '',
+    restrictToWorkspace: el('restrictToWorkspace').checked,
     webhookCallbackUrl: el('webhookCallbackUrl').value,
+    webhookTimeoutSeconds: Number(el('webhookTimeoutSeconds').value || 15),
+    webhookSignKey: el('webhookSignKey').value,
+    webhookSignSecret: el('webhookSignSecret').value,
+    webhookMessageType: el('webhookMessageType').value,
+    webhookMessageTemplate: el('webhookMessageTemplate').value,
+    webhookLinkTitle: el('webhookLinkTitle').value,
+    webhookLinkMessageUrl: el('webhookLinkMessageUrl').value,
+    webhookLinkButtonTitle: el('webhookLinkButtonTitle').value,
   };
   await api('/api/config', {
     method: 'POST',
@@ -237,8 +395,99 @@ async function testWebhook() {
   }
 }
 
+function formatCronTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  return d.toLocaleString();
+}
+
+function scheduleText(job) {
+  if (job.scheduleKind === 'every') return 'every ' + (job.everySeconds || 0) + 's';
+  if (job.scheduleKind === 'cron') return job.cronExpr || '';
+  if (job.scheduleKind === 'at') return job.atIso || '';
+  return '';
+}
+
+async function loadCronJobs() {
+  const data = await api('/api/cron/jobs?all=1');
+  const jobs = data.jobs || [];
+  const container = el('cronList');
+
+  let html = '<div class="cron-head"><div>ID</div><div>任务</div><div>计划</div><div>操作</div></div>';
+  if (!jobs.length) {
+    html += '<div class="cron-item"><div>-</div><div>暂无任务</div><div>-</div><div>-</div></div>';
+  } else {
+    for (const j of jobs) {
+      const status = j.enabled ? '启用' : '禁用';
+      const meta = status + ' / next: ' + formatCronTime(j.nextRunAtMs);
+      html += '<div class="cron-item">' +
+        '<div>' + escapeHtml(j.id) + '</div>' +
+        '<div>' + escapeHtml(j.name) + '<div class="hint">' + escapeHtml(meta) + '</div></div>' +
+        '<div>' + escapeHtml(scheduleText(j)) + '</div>' +
+        '<div class="cron-actions">' +
+          '<button class="secondary" data-act="toggle" data-id="' + escapeHtml(j.id) + '" data-enabled="' + (j.enabled ? '1' : '0') + '">' + (j.enabled ? '禁用' : '启用') + '</button>' +
+          '<button class="teal" data-act="run" data-id="' + escapeHtml(j.id) + '">执行</button>' +
+          '<button data-act="remove" data-id="' + escapeHtml(j.id) + '">删除</button>' +
+        '</div>' +
+      '</div>';
+    }
+  }
+
+  container.innerHTML = html;
+}
+
+async function addCronJob() {
+  el('cronStatus').textContent = '保存任务中...';
+  const payload = {
+    name: el('cronName').value.trim() || '新任务',
+    message: el('cronMessage').value.trim(),
+    scheduleType: el('cronScheduleType').value,
+    everySeconds: Number(el('cronEverySeconds').value || 0),
+    cronExpr: el('cronExpr').value.trim(),
+    atTime: el('cronAt').value,
+  };
+  if (!payload.message) {
+    el('cronStatus').textContent = '任务消息不能为空';
+    return;
+  }
+  try {
+    await api('/api/cron/jobs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    el('cronStatus').textContent = '任务已创建';
+    await loadCronJobs();
+  } catch (err) {
+    el('cronStatus').textContent = '创建失败: ' + err.message;
+  }
+}
+
+async function onCronAction(e) {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const action = btn.getAttribute('data-act');
+  const jobId = btn.getAttribute('data-id');
+  try {
+    if (action === 'toggle') {
+      const enabled = btn.getAttribute('data-enabled') !== '1';
+      await api('/api/cron/toggle', { method: 'POST', body: JSON.stringify({ jobId, enabled }) });
+      el('cronStatus').textContent = enabled ? '任务已启用' : '任务已禁用';
+    } else if (action === 'remove') {
+      await api('/api/cron/remove', { method: 'POST', body: JSON.stringify({ jobId }) });
+      el('cronStatus').textContent = '任务已删除';
+    } else if (action === 'run') {
+      await api('/api/cron/run', { method: 'POST', body: JSON.stringify({ jobId, force: true }) });
+      el('cronStatus').textContent = '任务已执行';
+    }
+    await loadCronJobs();
+  } catch (err) {
+    el('cronStatus').textContent = '操作失败: ' + err.message;
+  }
+}
+
 el('saveBtn').addEventListener('click', saveConfig);
 el('provider').addEventListener('change', updateApiBaseState);
+el('webhookMessageType').addEventListener('change', updateWebhookMessageTypeState);
 el('sendBtn').addEventListener('click', sendChat);
 el('webhookTestBtn').addEventListener('click', testWebhook);
 el('newSessionBtn').addEventListener('click', async () => {
@@ -251,10 +500,17 @@ el('message').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') sendChat();
 });
 
+el('cronScheduleType').addEventListener('change', updateCronScheduleInputs);
+el('cronAddBtn').addEventListener('click', addCronJob);
+el('cronRefreshBtn').addEventListener('click', loadCronJobs);
+el('cronList').addEventListener('click', onCronAction);
+
 (async () => {
   setSessionInfo();
   await loadConfig();
   await loadHistory();
+  updateCronScheduleInputs();
+  await loadCronJobs();
 })();
 </script>
 </body>
@@ -354,6 +610,15 @@ class WebUIRuntime:
             provider_name=config.get_provider_name(),
         )
 
+    def _as_bool(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return False
+
     def load_ui_config(self) -> dict[str, Any]:
         config = load_config()
         model = config.agents.defaults.model
@@ -374,7 +639,16 @@ class WebUIRuntime:
             "model": model,
             "apiKey": provider_cfg.api_key if provider_cfg else "",
             "apiBase": provider_cfg.api_base if provider_cfg and selected == "custom" else "",
+            "restrictToWorkspace": bool(config.tools.restrict_to_workspace),
             "webhookCallbackUrl": webhook_cfg.callback_url,
+            "webhookTimeoutSeconds": webhook_cfg.timeout_seconds,
+            "webhookSignKey": webhook_cfg.sign_key,
+            "webhookSignSecret": webhook_cfg.sign_secret,
+            "webhookMessageType": webhook_cfg.message_type,
+            "webhookMessageTemplate": webhook_cfg.message_template,
+            "webhookLinkTitle": webhook_cfg.link_title,
+            "webhookLinkMessageUrl": webhook_cfg.link_message_url,
+            "webhookLinkButtonTitle": webhook_cfg.link_button_title,
             "inboundWebhookUrl": self.inbound_webhook_url,
         }
 
@@ -407,9 +681,39 @@ class WebUIRuntime:
                 if model:
                     config.agents.defaults.model = model
 
+            if "restrictToWorkspace" in payload:
+                config.tools.restrict_to_workspace = self._as_bool(payload.get("restrictToWorkspace"))
+
             webhook = config.channels.webhook
             if "webhookCallbackUrl" in payload:
                 webhook.callback_url = str(payload.get("webhookCallbackUrl") or "").strip()
+            if "webhookTimeoutSeconds" in payload:
+                try:
+                    webhook.timeout_seconds = max(1, int(payload.get("webhookTimeoutSeconds") or 15))
+                except (TypeError, ValueError):
+                    webhook.timeout_seconds = 15
+
+            if "webhookSignKey" in payload:
+                webhook.sign_key = str(payload.get("webhookSignKey") or "").strip()
+            if "webhookSignSecret" in payload:
+                webhook.sign_secret = str(payload.get("webhookSignSecret") or "").strip()
+
+            if "webhookMessageType" in payload:
+                message_type = str(payload.get("webhookMessageType") or "text").strip().lower()
+                if message_type not in {"text", "markdown", "link"}:
+                    raise ValueError("webhookMessageType must be one of: text, markdown, link")
+                webhook.message_type = message_type
+
+            if "webhookMessageTemplate" in payload:
+                webhook.message_template = str(payload.get("webhookMessageTemplate") or "").strip() or "{reply}"
+
+            if "webhookLinkTitle" in payload:
+                webhook.link_title = str(payload.get("webhookLinkTitle") or "").strip() or "chasingclaw 回复"
+            if "webhookLinkMessageUrl" in payload:
+                webhook.link_message_url = str(payload.get("webhookLinkMessageUrl") or "").strip()
+            if "webhookLinkButtonTitle" in payload:
+                webhook.link_button_title = str(payload.get("webhookLinkButtonTitle") or "").strip() or "查看详情"
+
             webhook.enabled = bool(webhook.callback_url)
 
             save_config(config)
@@ -470,10 +774,21 @@ class WebUIRuntime:
             )
         return messages
 
-    def _post_json(self, url: str, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+    def _post_json(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        timeout: int,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        raw_body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        req_headers = {"Content-Type": "application/json"}
+        if headers:
+            req_headers.update(headers)
+
         try:
             with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, json=payload)
+                response = client.post(url, content=raw_body, headers=req_headers)
                 body: Any
                 ctype = response.headers.get("content-type", "")
                 if "application/json" in ctype:
@@ -494,17 +809,79 @@ class WebUIRuntime:
     def _is_zhcx_callback_payload(self, payload: dict[str, Any]) -> bool:
         return "chatid" in payload and "content" in payload
 
-    def _build_zhcx_text_payload(self, reply: str) -> dict[str, Any]:
-        # Wisdom Caixin webhook: single message <= 5000 characters.
-        content = (reply or "").strip() or " "
-        if len(content) > 5000:
-            content = content[:5000]
+    def _render_message(self, reply: str, template: str) -> str:
+        tmpl = (template or "").strip()
+        if not tmpl:
+            return reply or ""
+        if "{reply}" in tmpl:
+            return tmpl.replace("{reply}", reply or "")
+        return f"{tmpl}\n{reply}" if reply else tmpl
+
+    def _truncate(self, text: str, limit: int = 5000) -> str:
+        clean = (text or "").strip() or " "
+        return clean[:limit]
+
+    def _build_zhcx_payload_from_text(self, text: str, message_type: str, webhook: Any) -> dict[str, Any]:
+        message_type = (message_type or "text").strip().lower()
+        rendered = self._truncate(text)
+
+        if message_type == "markdown":
+            return {
+                "msgtype": "markdown",
+                "markdown": {
+                    "text": rendered,
+                },
+            }
+
+        if message_type == "link":
+            title = (webhook.link_title or "chasingclaw 回复").strip() or "chasingclaw 回复"
+            btn_title = (webhook.link_button_title or "查看详情").strip() or "查看详情"
+            link_obj: dict[str, Any] = {
+                "title": title,
+                "text": rendered,
+                "btnTitle": btn_title[:12],
+            }
+            link_url = (webhook.link_message_url or "").strip()
+            if link_url:
+                link_obj["messageUrl"] = link_url
+            return {
+                "msgtype": "link",
+                "link": link_obj,
+            }
+
         return {
             "msgtype": "text",
             "text": {
-                "content": content,
+                "content": rendered,
             },
         }
+
+    def _build_zhcx_outbound_payload(self, reply: str, webhook: Any) -> dict[str, Any]:
+        rendered = self._render_message(reply or "", webhook.message_template)
+        return self._build_zhcx_payload_from_text(rendered, webhook.message_type, webhook)
+
+    def _build_sign_headers(self, body_bytes: bytes, sign_key: str, sign_secret: str) -> dict[str, str]:
+        key = (sign_key or "").strip()
+        secret = (sign_secret or "").strip()
+        if not key or not secret:
+            return {}
+
+        content_md5 = hashlib.md5(body_bytes).hexdigest()
+        date_gmt = formatdate(usegmt=True)
+        sign_text = f"{secret}{content_md5}application/json{date_gmt}"
+        signature = hashlib.sha1(sign_text.encode("utf-8")).hexdigest()
+
+        return {
+            "Content-Md5": content_md5,
+            "Content-Type": "application/json",
+            "DATE": date_gmt,
+            "Authorization": f"{key}:{signature}",
+        }
+
+    def _post_zhcx_payload(self, url: str, payload: dict[str, Any], timeout: int, webhook: Any) -> dict[str, Any]:
+        body_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        headers = self._build_sign_headers(body_bytes, webhook.sign_key, webhook.sign_secret)
+        return self._post_json(url, payload, timeout=timeout, headers=headers)
 
     def send_zhcx_test_message(self, payload: dict[str, Any]) -> dict[str, Any]:
         config = load_config()
@@ -515,8 +892,8 @@ class WebUIRuntime:
 
         timeout = max(1, int(webhook.timeout_seconds))
         message = str(payload.get("message") or "").strip() or "chasingclaw 智慧财信联通测试"
-        outbound_payload = self._build_zhcx_text_payload(message)
-        result = self._post_json(callback_url, outbound_payload, timeout=timeout)
+        outbound_payload = self._build_zhcx_payload_from_text(message, webhook.message_type, webhook)
+        result = self._post_zhcx_payload(callback_url, outbound_payload, timeout=timeout, webhook=webhook)
         return {
             "ok": bool(result.get("ok")),
             "url": callback_url,
@@ -556,7 +933,7 @@ class WebUIRuntime:
         reply_text = str(chat_result.get("reply", ""))
         callback_payload: dict[str, Any]
         if is_zhcx_payload:
-            callback_payload = self._build_zhcx_text_payload(reply_text)
+            callback_payload = self._build_zhcx_outbound_payload(reply_text, webhook)
         else:
             callback_payload = {
                 "type": "chasingclaw.webhook.callback",
@@ -573,7 +950,10 @@ class WebUIRuntime:
                     "error": "callback_url cannot be the same as current request endpoint",
                 }
             else:
-                callback_result = self._post_json(callback_url, callback_payload, timeout=timeout)
+                if is_zhcx_payload:
+                    callback_result = self._post_zhcx_payload(callback_url, callback_payload, timeout=timeout, webhook=webhook)
+                else:
+                    callback_result = self._post_json(callback_url, callback_payload, timeout=timeout)
 
         if is_zhcx_payload:
             # Keep the callback response compatible with Wisdom Caixin protocol.
@@ -585,6 +965,122 @@ class WebUIRuntime:
             "reply": reply_text,
             "callback": callback_result,
         }
+
+    def _cron_service(self):
+        from chasingclaw.config.loader import get_data_dir
+        from chasingclaw.cron.service import CronService
+
+        store_path = get_data_dir() / "cron" / "jobs.json"
+        return CronService(store_path)
+
+    def _cron_job_to_dict(self, job: Any) -> dict[str, Any]:
+        schedule_kind = job.schedule.kind
+        at_iso = ""
+        if job.schedule.at_ms:
+            at_iso = datetime.datetime.fromtimestamp(job.schedule.at_ms / 1000).isoformat(timespec="minutes")
+
+        return {
+            "id": job.id,
+            "name": job.name,
+            "enabled": job.enabled,
+            "scheduleKind": schedule_kind,
+            "everySeconds": (job.schedule.every_ms or 0) // 1000,
+            "cronExpr": job.schedule.expr or "",
+            "atIso": at_iso,
+            "message": job.payload.message,
+            "nextRunAtMs": job.state.next_run_at_ms,
+            "lastRunAtMs": job.state.last_run_at_ms,
+            "lastStatus": job.state.last_status,
+            "lastError": job.state.last_error,
+        }
+
+    def list_cron_jobs(self, include_disabled: bool = True) -> dict[str, Any]:
+        service = self._cron_service()
+        jobs = service.list_jobs(include_disabled=include_disabled)
+        return {
+            "jobs": [self._cron_job_to_dict(job) for job in jobs],
+        }
+
+    def add_cron_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from chasingclaw.cron.types import CronSchedule
+
+        name = str(payload.get("name") or "").strip() or "新任务"
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            raise ValueError("message is required")
+
+        schedule_type = str(payload.get("scheduleType") or "every").strip().lower()
+        if schedule_type == "every":
+            try:
+                every_seconds = int(payload.get("everySeconds") or 0)
+            except (TypeError, ValueError):
+                every_seconds = 0
+            if every_seconds <= 0:
+                raise ValueError("everySeconds must be > 0")
+            schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
+        elif schedule_type == "cron":
+            cron_expr = str(payload.get("cronExpr") or "").strip()
+            if not cron_expr:
+                raise ValueError("cronExpr is required for cron schedule")
+            schedule = CronSchedule(kind="cron", expr=cron_expr)
+        elif schedule_type == "at":
+            at_time = str(payload.get("atTime") or "").strip()
+            if not at_time:
+                raise ValueError("atTime is required for at schedule")
+            if at_time.endswith("Z"):
+                at_time = at_time[:-1] + "+00:00"
+            try:
+                dt = datetime.datetime.fromisoformat(at_time)
+            except ValueError as exc:
+                raise ValueError("invalid atTime format, expected ISO datetime") from exc
+            schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
+        else:
+            raise ValueError("scheduleType must be one of: every, cron, at")
+
+        service = self._cron_service()
+        job = service.add_job(name=name, schedule=schedule, message=message)
+        return {
+            "ok": True,
+            "job": self._cron_job_to_dict(job),
+        }
+
+    def toggle_cron_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        job_id = str(payload.get("jobId") or "").strip()
+        if not job_id:
+            raise ValueError("jobId is required")
+
+        enabled = self._as_bool(payload.get("enabled"))
+        service = self._cron_service()
+        job = service.enable_job(job_id, enabled=enabled)
+        if not job:
+            raise ValueError(f"job not found: {job_id}")
+        return {
+            "ok": True,
+            "job": self._cron_job_to_dict(job),
+        }
+
+    def remove_cron_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        job_id = str(payload.get("jobId") or "").strip()
+        if not job_id:
+            raise ValueError("jobId is required")
+
+        service = self._cron_service()
+        removed = service.remove_job(job_id)
+        if not removed:
+            raise ValueError(f"job not found: {job_id}")
+        return {"ok": True, "jobId": job_id}
+
+    def run_cron_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        job_id = str(payload.get("jobId") or "").strip()
+        if not job_id:
+            raise ValueError("jobId is required")
+
+        force = self._as_bool(payload.get("force"))
+        service = self._cron_service()
+        ok = asyncio.run(service.run_job(job_id, force=force))
+        if not ok:
+            raise ValueError(f"failed to run job: {job_id}")
+        return {"ok": True, "jobId": job_id}
 
 
 class _WebUIHandler(BaseHTTPRequestHandler):
@@ -658,6 +1154,14 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/cron/jobs":
+            include_disabled = (parse_qs(parsed.query).get("all") or ["1"])[0].strip() != "0"
+            try:
+                self._send_json(200, self.runtime.list_cron_jobs(include_disabled=include_disabled))
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+            return
+
         if parsed.path == "/api/webhook/request":
             # Wisdom Caixin callback availability check expects this exact payload.
             self._send_json(200, {"result": "ok"})
@@ -681,6 +1185,26 @@ class _WebUIHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/chat":
                 result = self.runtime.chat(payload, channel="webui")
+                self._send_json(200, result)
+                return
+
+            if parsed.path == "/api/cron/jobs":
+                result = self.runtime.add_cron_job(payload)
+                self._send_json(200, result)
+                return
+
+            if parsed.path == "/api/cron/toggle":
+                result = self.runtime.toggle_cron_job(payload)
+                self._send_json(200, result)
+                return
+
+            if parsed.path == "/api/cron/remove":
+                result = self.runtime.remove_cron_job(payload)
+                self._send_json(200, result)
+                return
+
+            if parsed.path == "/api/cron/run":
+                result = self.runtime.run_cron_job(payload)
                 self._send_json(200, result)
                 return
 

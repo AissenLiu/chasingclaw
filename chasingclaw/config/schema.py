@@ -142,11 +142,22 @@ class QQConfig(BaseModel):
 
 
 class WebhookConfig(BaseModel):
-    """Webhook integration settings for callbacks."""
+    """Webhook integration settings for Wisdom Caixin robot integration."""
 
     enabled: bool = False
     callback_url: str = ""  # Wisdom Caixin robot webhook URL (outbound send endpoint)
     timeout_seconds: int = 15
+
+    # Optional signature headers for secure webhook delivery.
+    sign_key: str = ""
+    sign_secret: str = ""
+
+    # Outbound message rendering options.
+    message_type: str = "text"  # text | markdown | link
+    message_template: str = "{reply}"  # Supports {reply} placeholder
+    link_title: str = "chasingclaw 回复"
+    link_message_url: str = ""
+    link_button_title: str = "查看详情"
 
 
 class ChannelsConfig(BaseModel):

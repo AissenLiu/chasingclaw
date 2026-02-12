@@ -51,15 +51,25 @@ chasingclaw ui --host 0.0.0.0 --port 18789
 
 - `http://<服务器IP>:18789`
 
-UI 主要能力：
+UI 可配置项：
 
-- 配置模型供应商（provider）、模型名（model）、API Key
-- provider 支持 `custom`，且仅 `custom` 可填写 API Base URL
+- 模型供应商（provider）、模型名（model）、API Key
+- `custom` provider 的 API Base URL（仅 `custom` 可填写）
+- `tools.restrictToWorkspace` 开关（限制工具仅访问工作目录）
+- 智慧财信机器人 webhook 出站地址
+- 智慧财信 webhook 请求超时（秒）
+- 智慧财信签名配置（key / secret）
+- 智慧财信回复消息类型（`text` / `markdown` / `link`）
+- 回复消息模板（支持 `{reply}` 占位符）
+- `link` 类型的 `title/messageUrl/btnTitle`
+- 只读展示 chasingclaw 入站地址（用于配置 callback URL）
+
+UI 交互能力：
+
 - 浏览器持久化 session，支持连续对话
 - 查看当前会话历史
-- 配置“智慧财信机器人webhook地址”（出站发送地址）
-- 展示只读“用于配置智慧财信机器人的webhook回调地址”（chasingclaw 入站地址）
-- 点击“测试智慧财信发送”可直接向智慧财信机器人发送测试消息
+- 一键“测试智慧财信发送”（直接向机器人 webhook 发测试消息）
+- 可视化管理 cron 定时任务（新增 / 启用禁用 / 执行 / 删除）
 
 ## 智慧财信联通步骤
 
@@ -110,7 +120,7 @@ UI 主要能力：
 
 ### 3) 出站消息（chasingclaw -> 智慧财信机器人webhook地址）
 
-发送格式：
+`msgtype=text`：
 
 ```json
 {
@@ -120,6 +130,39 @@ UI 主要能力：
   }
 }
 ```
+
+`msgtype=markdown`：
+
+```json
+{
+  "msgtype": "markdown",
+  "markdown": {
+    "text": "# 标题\n\n...assistant response..."
+  }
+}
+```
+
+`msgtype=link`：
+
+```json
+{
+  "msgtype": "link",
+  "link": {
+    "title": "chasingclaw 回复",
+    "text": "...assistant response...",
+    "messageUrl": "https://example.com/detail",
+    "btnTitle": "查看详情"
+  }
+}
+```
+
+签名配置（可选）：
+
+- 当配置了 `sign_key + sign_secret`，出站请求会自动带：
+  - `Content-Md5`
+  - `Content-Type: application/json`
+  - `DATE`
+  - `Authorization: key:sha1(secret + Content-Md5 + Content-Type + DATE)`
 
 说明：
 
@@ -138,6 +181,14 @@ UI 主要能力：
 }
 ```
 
+## Cron 定时任务 API（UI 调用）
+
+- `GET /api/cron/jobs?all=1`：获取任务列表
+- `POST /api/cron/jobs`：新增任务（支持 `every` / `cron` / `at`）
+- `POST /api/cron/toggle`：启用或禁用任务
+- `POST /api/cron/run`：立即执行任务
+- `POST /api/cron/remove`：删除任务
+
 ## 配置说明
 
 主配置文件：
@@ -148,14 +199,19 @@ UI 主要能力：
 
 - `providers.*`：API Key / API Base
 - `agents.defaults.model`：默认模型
-- `tools`：shell/web 工具行为
-- `channels`：Telegram/Discord/Slack/Email 等渠道
-- `channels.webhook.callback_url`：智慧财信机器人 webhook 出站地址
+- `tools.restrictToWorkspace`：是否限制工具访问在 workspace 内
+- `channels.webhook.callbackUrl`：智慧财信机器人 webhook 出站地址
+- `channels.webhook.timeoutSeconds`：出站请求超时
+- `channels.webhook.signKey/signSecret`：签名配置
+- `channels.webhook.messageType`：`text` / `markdown` / `link`
+- `channels.webhook.messageTemplate`：回复模板（支持 `{reply}`）
+- `channels.webhook.linkTitle/linkMessageUrl/linkButtonTitle`：link 类型消息配置
 
 ## 常见问题
 
 - callback 地址保存失败：先确认 `http://<服务器IP>:18789/api/webhook/request` 可公网访问，且 GET 返回 `{"result":"ok"}`。
 - 群里不回消息：检查智慧财信安全设置（关键词/IP 白名单/签名校验）是否放行。
+- 签名校验失败：确认智慧财信后台 key/secret 与 UI 配置一致。
 - UI 显示为 localhost：设置环境变量 `CHASINGCLAW_PUBLIC_HOST` 后重启，例如：
 
 ```bash
