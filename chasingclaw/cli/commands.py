@@ -564,7 +564,7 @@ def channels_status():
 
     # Webhook
     webhook = config.channels.webhook
-    webhook_config = webhook.request_url or webhook.callback_url or "[dim]not configured[/dim]"
+    webhook_config = webhook.callback_url or "[dim]not configured[/dim]"
     table.add_row(
         "Webhook",
         "✓" if webhook.enabled else "✗",
@@ -821,11 +821,11 @@ def ui(
     """Start the chasingclaw Web UI server."""
     from chasingclaw.webui.server import WebUIServer
 
-    url_host = "localhost" if host in {"0.0.0.0", "::"} else host
+    server = WebUIServer(host=host, port=port)
+    url_host = server.runtime._public_host()
     console.print(f"{__logo__} Starting chasingclaw Web UI on http://{url_host}:{port}")
     console.print("[dim]Press Ctrl+C to stop[/dim]")
 
-    server = WebUIServer(host=host, port=port)
     server.serve(open_browser=open_browser)
 
 

@@ -9,7 +9,7 @@
 - Project has been fully renamed from `nanobot` to `chasingclaw`
 - Removed logo/case media assets and demo image bundles
 - Added Web UI server (default port `18789`)
-- Added configurable webhook request/callback support
+- Added webhook callback configuration and displayed inbound webhook address
 
 ## Install
 
@@ -63,9 +63,11 @@ Then open:
 Web UI capabilities:
 
 - Configure provider, model, API key, and API base URL
+- Provider list includes `custom`; API Base URL can only be edited in `custom` mode
 - Continue conversation by persistent session id in browser storage
 - Inspect/load previous chat history for current session
-- Configure webhook request/callback URLs
+- Configure `智慧财信机器人webhook地址` (outbound callback URL)
+- See the read-only `chasingclaw` inbound webhook URL for IM platform callback setup
 
 ## Webhook Protocol
 
@@ -79,7 +81,6 @@ Example request:
 {
   "message": "Summarize today's tasks",
   "sessionId": "team-a",
-  "requestUrl": "https://example.com/request-hook",
   "callbackUrl": "https://example.com/callback-hook"
 }
 ```
@@ -91,11 +92,6 @@ Example response:
   "ok": true,
   "sessionId": "team-a",
   "reply": "...assistant response...",
-  "requestRelay": {
-    "ok": true,
-    "status": 200,
-    "body": "..."
-  },
   "callback": {
     "ok": true,
     "status": 200,
@@ -106,9 +102,10 @@ Example response:
 
 Notes:
 
-- `requestUrl` and `callbackUrl` can also be configured in UI and persisted to config
-- If configured, assistant will relay request payload to `requestUrl`
+- `callbackUrl` can be configured in UI (field name: `智慧财信机器人webhook地址`) or passed in request body
+- The UI displays a read-only inbound webhook URL for IM callback configuration (prefers LAN IP instead of localhost)
 - After generating reply, assistant posts callback payload to `callbackUrl`
+- You can override the displayed inbound host via env `CHASINGCLAW_PUBLIC_HOST`
 
 ## Config Overview
 
@@ -122,7 +119,7 @@ Common sections:
 - `agents.defaults.model` for default model
 - `tools` for shell/web behavior
 - `channels` for Telegram/Discord/Slack/Email/etc
-- `channels.webhook` for webhook request/callback settings
+- `channels.webhook` for webhook callback settings
 
 ## Docker
 

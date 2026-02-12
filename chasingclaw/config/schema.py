@@ -142,10 +142,9 @@ class QQConfig(BaseModel):
 
 
 class WebhookConfig(BaseModel):
-    """Webhook integration settings for request relay and callbacks."""
+    """Webhook integration settings for callbacks."""
 
     enabled: bool = False
-    request_url: str = ""  # Optional remote URL to receive inbound request payloads
     callback_url: str = ""  # Optional remote URL to receive assistant callback payloads
     timeout_seconds: int = 15
 
@@ -230,6 +229,12 @@ class ToolsConfig(BaseModel):
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
 
 
+class UIConfig(BaseModel):
+    """Web UI preference settings."""
+
+    selected_provider: str = ""  # e.g. "openrouter", "anthropic", "custom"
+
+
 class Config(BaseSettings):
     """Root configuration for chasingclaw."""
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
@@ -237,6 +242,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     
     @property
     def workspace_path(self) -> Path:

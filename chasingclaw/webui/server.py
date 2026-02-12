@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
+import socket
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,7 +19,7 @@ from chasingclaw.agent.loop import AgentLoop
 from chasingclaw.bus.queue import MessageBus
 from chasingclaw.config.loader import load_config, save_config
 from chasingclaw.providers.litellm_provider import LiteLLMProvider
-from chasingclaw.providers.registry import PROVIDERS
+from chasingclaw.providers.registry import PROVIDERS, find_by_name
 from chasingclaw.session.manager import SessionManager
 
 
@@ -67,15 +69,14 @@ UI_HTML = """<!doctype html>
       <label>API Key</label>
       <input id="apiKey" type="password" placeholder="输入后点击保存" />
 
-      <label>Webhook Request URL</label>
-      <input id="webhookRequestUrl" placeholder="可选：转发请求到该URL" />
+      <label>智慧财信机器人webhook地址</label>
+      <input id="webhookCallbackUrl" placeholder="例如 https://your-im-server/webhook" />
 
-      <label>Webhook Callback URL</label>
-      <input id="webhookCallbackUrl" placeholder="可选：回复后回调到该URL" />
+      <label>用于配置智慧财信机器人的webhook回调地址</label>
+      <input id="inboundWebhookUrl" readonly />
 
       <button id="saveBtn">保存配置</button>
       <div class="status" id="cfgStatus"></div>
-      <div class="hint" id="requestHint"></div>
     </div>
 
     <div class="card">
@@ -125,6 +126,22 @@ function setSessionInfo() {
   el('sessionInfo').textContent = 'Session: ' + sessionId;
 }
 
+function isCustomProvider() {
+  return el('provider').value === 'custom';
+}
+
+function updateApiBaseState() {
+  const input = el('apiBase');
+  const custom = isCustomProvider();
+  input.disabled = !custom;
+  if (!custom) {
+    input.value = '';
+    input.placeholder = '仅 custom 可填写';
+  } else {
+    input.placeholder = '例如 http://localhost:8000/v1';
+  }
+}
+
 async function loadConfig() {
   const data = await api('/api/config');
   const provider = el('provider');
@@ -135,13 +152,22 @@ async function loadConfig() {
     option.textContent = p;
     provider.appendChild(option);
   }
-  provider.value = data.provider || '';
+  const providerValue = data.provider || '';
+  if (![...provider.options].some((o) => o.value === providerValue) && providerValue) {
+    const option = document.createElement('option');
+    option.value = providerValue;
+    option.textContent = providerValue;
+    provider.appendChild(option);
+  }
+  provider.value = providerValue;
+  updateApiBaseState();
   el('model').value = data.model || '';
-  el('apiBase').value = data.apiBase || '';
+  if (isCustomProvider()) {
+    el('apiBase').value = data.apiBase || '';
+  }
   el('apiKey').value = data.apiKey || '';
-  el('webhookRequestUrl').value = data.webhookRequestUrl || '';
   el('webhookCallbackUrl').value = data.webhookCallbackUrl || '';
-  el('requestHint').textContent = '本地Webhook请求地址: ' + (data.localWebhookRequestUrl || '');
+  el('inboundWebhookUrl').value = data.inboundWebhookUrl || '';
   el('cfgStatus').textContent = '配置已加载';
 }
 
@@ -161,8 +187,7 @@ async function saveConfig() {
     provider: el('provider').value,
     model: el('model').value,
     apiKey: el('apiKey').value,
-    apiBase: el('apiBase').value,
-    webhookRequestUrl: el('webhookRequestUrl').value,
+    apiBase: isCustomProvider() ? el('apiBase').value : '',
     webhookCallbackUrl: el('webhookCallbackUrl').value,
   };
   await api('/api/config', {
@@ -210,6 +235,7 @@ async function testWebhook() {
 }
 
 el('saveBtn').addEventListener('click', saveConfig);
+el('provider').addEventListener('change', updateApiBaseState);
 el('sendBtn').addEventListener('click', sendChat);
 el('webhookTestBtn').addEventListener('click', testWebhook);
 el('newSessionBtn').addEventListener('click', async () => {
@@ -241,19 +267,80 @@ class WebUIRuntime:
         self.port = port
         self._lock = threading.Lock()
 
+    def _detect_lan_ip(self) -> str | None:
+        for target in ("8.8.8.8", "1.1.1.1"):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.connect((target, 80))
+                    ip = sock.getsockname()[0]
+                    if ip and not ip.startswith("127."):
+                        return ip
+            except OSError:
+                continue
+
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+            if ip and not ip.startswith("127."):
+                return ip
+        except OSError:
+            pass
+
+        return None
+
     def _public_host(self) -> str:
-        return "localhost" if self.host in {"0.0.0.0", "::"} else self.host
+        override = os.environ.get("CHASINGCLAW_PUBLIC_HOST", "").strip()
+        if override:
+            return override
+
+        # For wildcard/loopback binding, expose a LAN-reachable inbound URL for webhook setup.
+        if self.host in {"0.0.0.0", "::", "localhost", "127.0.0.1", "::1"}:
+            return self._detect_lan_ip() or "127.0.0.1"
+
+        return self.host
 
     @property
-    def local_webhook_request_url(self) -> str:
+    def inbound_webhook_url(self) -> str:
         return f"http://{self._public_host()}:{self.port}/api/webhook/request"
 
     def _provider_options(self) -> list[str]:
-        return [spec.name for spec in PROVIDERS]
+        return [spec.name for spec in PROVIDERS] + ["custom"]
 
     def _make_provider(self, config: Any) -> LiteLLMProvider:
-        provider_cfg = config.get_provider()
         model = config.agents.defaults.model
+        selected = (config.ui.selected_provider or "").strip().lower()
+
+        # Custom mode: use OpenAI-compatible endpoint provided by user
+        if selected == "custom":
+            provider_cfg = config.providers.openai
+            if not (provider_cfg and provider_cfg.api_key) and not model.startswith("bedrock/"):
+                raise ValueError("Custom provider requires API key.")
+            return LiteLLMProvider(
+                api_key=provider_cfg.api_key if provider_cfg else None,
+                api_base=provider_cfg.api_base if provider_cfg else None,
+                default_model=model,
+                extra_headers=provider_cfg.extra_headers if provider_cfg else None,
+                provider_name=None,
+            )
+
+        if selected and selected != "custom" and hasattr(config.providers, selected):
+            provider_cfg = getattr(config.providers, selected)
+            if not (provider_cfg and provider_cfg.api_key) and not model.startswith("bedrock/"):
+                raise ValueError("No API key configured for selected provider.")
+
+            api_base = provider_cfg.api_base if provider_cfg else None
+            spec = find_by_name(selected)
+            if not api_base and spec and spec.is_gateway and spec.default_api_base:
+                api_base = spec.default_api_base
+
+            return LiteLLMProvider(
+                api_key=provider_cfg.api_key if provider_cfg else None,
+                api_base=api_base,
+                default_model=model,
+                extra_headers=provider_cfg.extra_headers if provider_cfg else None,
+                provider_name=selected,
+            )
+
+        provider_cfg = config.get_provider()
         if not (provider_cfg and provider_cfg.api_key) and not model.startswith("bedrock/"):
             raise ValueError("No API key configured. Please save provider/apiKey in the UI first.")
         return LiteLLMProvider(
@@ -267,18 +354,25 @@ class WebUIRuntime:
     def load_ui_config(self) -> dict[str, Any]:
         config = load_config()
         model = config.agents.defaults.model
-        provider_name = config.get_provider_name(model) or "openrouter"
-        provider_cfg = getattr(config.providers, provider_name, None)
+
+        selected = (config.ui.selected_provider or "").strip().lower()
+        if selected not in self._provider_options():
+            selected = config.get_provider_name(model) or "openrouter"
+
+        if selected == "custom":
+            provider_cfg = config.providers.openai
+        else:
+            provider_cfg = getattr(config.providers, selected, None)
+
         webhook_cfg = config.channels.webhook
         return {
-            "provider": provider_name,
+            "provider": selected,
             "providerOptions": self._provider_options(),
             "model": model,
             "apiKey": provider_cfg.api_key if provider_cfg else "",
-            "apiBase": provider_cfg.api_base if provider_cfg else "",
-            "webhookRequestUrl": webhook_cfg.request_url,
+            "apiBase": provider_cfg.api_base if provider_cfg and selected == "custom" else "",
             "webhookCallbackUrl": webhook_cfg.callback_url,
-            "localWebhookRequestUrl": self.local_webhook_request_url,
+            "inboundWebhookUrl": self.inbound_webhook_url,
         }
 
     def save_ui_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -286,19 +380,24 @@ class WebUIRuntime:
             config = load_config()
 
             provider_name = str(payload.get("provider") or "").strip().lower()
-            if provider_name and not hasattr(config.providers, provider_name):
+            options = set(self._provider_options())
+            if provider_name and provider_name not in options:
                 raise ValueError(f"Unknown provider: {provider_name}")
             if not provider_name:
-                provider_name = config.get_provider_name() or "openrouter"
+                provider_name = (config.ui.selected_provider or config.get_provider_name() or "openrouter").lower()
 
-            provider_cfg = getattr(config.providers, provider_name)
+            config.ui.selected_provider = provider_name
+
+            if provider_name == "custom":
+                provider_cfg = config.providers.openai
+                if "apiBase" in payload:
+                    api_base = str(payload.get("apiBase") or "").strip()
+                    provider_cfg.api_base = api_base or None
+            else:
+                provider_cfg = getattr(config.providers, provider_name)
 
             if "apiKey" in payload:
                 provider_cfg.api_key = str(payload.get("apiKey") or "").strip()
-
-            if "apiBase" in payload:
-                api_base = str(payload.get("apiBase") or "").strip()
-                provider_cfg.api_base = api_base or None
 
             if "model" in payload:
                 model = str(payload.get("model") or "").strip()
@@ -306,11 +405,9 @@ class WebUIRuntime:
                     config.agents.defaults.model = model
 
             webhook = config.channels.webhook
-            if "webhookRequestUrl" in payload:
-                webhook.request_url = str(payload.get("webhookRequestUrl") or "").strip()
             if "webhookCallbackUrl" in payload:
                 webhook.callback_url = str(payload.get("webhookCallbackUrl") or "").strip()
-            webhook.enabled = bool(webhook.request_url or webhook.callback_url)
+            webhook.enabled = bool(webhook.callback_url)
 
             save_config(config)
 
@@ -401,21 +498,8 @@ class WebUIRuntime:
         webhook = config.channels.webhook
         timeout = max(1, int(webhook.timeout_seconds))
 
-        request_url = str(payload.get("requestUrl") or webhook.request_url or "").strip()
         callback_url = str(payload.get("callbackUrl") or webhook.callback_url or "").strip()
         current_request_url = str(payload.get("_currentRequestUrl") or "").strip()
-
-        request_relay: dict[str, Any] | None = None
-        if request_url and request_url != current_request_url:
-            request_relay = self._post_json(
-                request_url,
-                {
-                    "type": "chasingclaw.webhook.request",
-                    "sessionId": session_id,
-                    "message": message,
-                },
-                timeout=timeout,
-            )
 
         chat_result = self.chat(
             {
@@ -446,7 +530,6 @@ class WebUIRuntime:
             "ok": True,
             "sessionId": session_id,
             "reply": chat_result.get("reply", ""),
-            "requestRelay": request_relay,
             "callback": callback_result,
         }
 

@@ -9,7 +9,7 @@ English version: [README.md](./README.md)
 - 项目已从 `nanobot` 全量重命名为 `chasingclaw`
 - 移除了 logo/case 等示例图片资源
 - 新增 Web UI 服务（默认端口 `18789`）
-- 新增可配置的 Webhook 请求/回调能力
+- 新增 Webhook 回调配置与入站地址展示能力
 
 ## 安装
 
@@ -63,9 +63,11 @@ chasingclaw ui --port 18789
 UI 功能：
 
 - 配置模型供应商（provider）、模型名（model）、API Key、API Base URL
+- 供应商支持 `custom` 选项，且只有 `custom` 才可填写 API Base URL
 - 基于浏览器本地保存的 session id 持续对话
 - 查看当前会话历史消息
-- 配置 Webhook 请求地址与回调地址
+- 配置“智慧财信机器人webhook地址”（出站回调地址）
+- 查看只读的 chasingclaw 入站 webhook 地址，用于 IM 平台回调配置
 
 ## Webhook 协议
 
@@ -79,7 +81,6 @@ UI 功能：
 {
   "message": "请总结今天的任务",
   "sessionId": "team-a",
-  "requestUrl": "https://example.com/request-hook",
   "callbackUrl": "https://example.com/callback-hook"
 }
 ```
@@ -91,11 +92,6 @@ UI 功能：
   "ok": true,
   "sessionId": "team-a",
   "reply": "...assistant response...",
-  "requestRelay": {
-    "ok": true,
-    "status": 200,
-    "body": "..."
-  },
   "callback": {
     "ok": true,
     "status": 200,
@@ -106,9 +102,10 @@ UI 功能：
 
 说明：
 
-- `requestUrl` 与 `callbackUrl` 也可在 Web UI 中配置并持久化到配置文件
-- 若配置了 `requestUrl`，请求会先被转发到该地址
+- `callbackUrl` 可在 Web UI（字段名“智慧财信机器人webhook地址”）中配置，或在请求体中传入
+- UI 会展示只读的入站 webhook 地址（优先展示局域网 IP，而非 localhost），供 IM 平台配置回调
 - 助手生成回复后，会将结果回调到 `callbackUrl`
+- 可通过环境变量 `CHASINGCLAW_PUBLIC_HOST` 覆盖 UI 中展示的入站主机地址
 
 ## 配置说明
 
@@ -122,7 +119,7 @@ UI 功能：
 - `agents.defaults.model`：默认模型
 - `tools`：shell/web 工具行为
 - `channels`：Telegram/Discord/Slack/Email 等渠道
-- `channels.webhook`：Webhook 请求/回调配置
+- `channels.webhook`：Webhook 回调配置
 
 ## Docker
 
