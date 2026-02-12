@@ -410,9 +410,9 @@ function formatWebhookEvent(event) {
   let text = '[Webhook] ' + (event.summary || event.event || '收到事件');
   if (event.detail) {
     try {
-      text += '\n' + JSON.stringify(event.detail, null, 2);
+      text += '\\n' + JSON.stringify(event.detail, null, 2);
     } catch (err) {
-      text += '\n(detail parse failed)';
+      text += '\\n(detail parse failed)';
     }
   }
   return text;
