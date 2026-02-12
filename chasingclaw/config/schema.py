@@ -145,7 +145,7 @@ class WebhookConfig(BaseModel):
     """Webhook integration settings for callbacks."""
 
     enabled: bool = False
-    callback_url: str = ""  # Optional remote URL to receive assistant callback payloads
+    callback_url: str = ""  # Wisdom Caixin robot webhook URL (outbound send endpoint)
     timeout_seconds: int = 15
 
 

@@ -66,46 +66,57 @@ UI 功能：
 - 供应商支持 `custom` 选项，且只有 `custom` 才可填写 API Base URL
 - 基于浏览器本地保存的 session id 持续对话
 - 查看当前会话历史消息
-- 配置“智慧财信机器人webhook地址”（出站回调地址）
+- 配置“智慧财信机器人webhook地址”（出站发送地址）
 - 查看只读的 chasingclaw 入站 webhook 地址，用于 IM 平台回调配置
 
 ## Webhook 协议
 
-内置 webhook 入口（由 `chasingclaw ui` 提供）：
+内置 webhook 入站地址（由 `chasingclaw ui` 提供）：
 
 - `POST /api/webhook/request`
 
-请求示例：
+智慧财信 callback 入站请求示例：
 
 ```json
 {
-  "message": "请总结今天的任务",
-  "sessionId": "team-a",
-  "callbackUrl": "https://example.com/callback-hook"
+  "chatid": 12345,
+  "creator": 2324234,
+  "content": "@webhook机器人 111",
+  "reply": {
+    "reply_content": "回复内容",
+    "reply_creator": 1234
+  },
+  "robot_key": "xxx",
+  "url": "https://xxxx",
+  "ctime": 3452452
 }
 ```
 
-响应示例：
+智慧财信 callback 兼容响应：
 
 ```json
 {
-  "ok": true,
-  "sessionId": "team-a",
-  "reply": "...assistant response...",
-  "callback": {
-    "ok": true,
-    "status": 200,
-    "body": "..."
+  "result": "ok"
+}
+```
+
+发送到“智慧财信机器人webhook地址”的出站消息格式：
+
+```json
+{
+  "msgtype": "text",
+  "text": {
+    "content": "...assistant response..."
   }
 }
 ```
 
 说明：
 
-- `callbackUrl` 可在 Web UI（字段名“智慧财信机器人webhook地址”）中配置，或在请求体中传入
+- Web UI 中“智慧财信机器人webhook地址”用于机器人消息出站发送
 - UI 会展示只读的入站 webhook 地址（优先展示局域网 IP，而非 localhost），供 IM 平台配置回调
-- 助手生成回复后，会将结果回调到 `callbackUrl`
 - 可通过环境变量 `CHASINGCLAW_PUBLIC_HOST` 覆盖 UI 中展示的入站主机地址
+- 为便于本地调试，`/api/webhook/request` 仍兼容 `{ "message", "sessionId", "callbackUrl" }` 请求
 
 ## 配置说明
 

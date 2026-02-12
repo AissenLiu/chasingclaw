@@ -66,46 +66,57 @@ Web UI capabilities:
 - Provider list includes `custom`; API Base URL can only be edited in `custom` mode
 - Continue conversation by persistent session id in browser storage
 - Inspect/load previous chat history for current session
-- Configure `智慧财信机器人webhook地址` (outbound callback URL)
+- Configure `智慧财信机器人webhook地址` (outbound robot webhook URL)
 - See the read-only `chasingclaw` inbound webhook URL for IM platform callback setup
 
 ## Webhook Protocol
 
-Built-in webhook endpoint (provided by `chasingclaw ui`):
+Built-in webhook inbound endpoint (provided by `chasingclaw ui`):
 
 - `POST /api/webhook/request`
 
-Example request:
+Wisdom Caixin callback request example:
 
 ```json
 {
-  "message": "Summarize today's tasks",
-  "sessionId": "team-a",
-  "callbackUrl": "https://example.com/callback-hook"
+  "chatid": 12345,
+  "creator": 2324234,
+  "content": "@webhook机器人 111",
+  "reply": {
+    "reply_content": "回复内容",
+    "reply_creator": 1234
+  },
+  "robot_key": "xxx",
+  "url": "https://xxxx",
+  "ctime": 3452452
 }
 ```
 
-Example response:
+Wisdom Caixin-compatible callback response:
 
 ```json
 {
-  "ok": true,
-  "sessionId": "team-a",
-  "reply": "...assistant response...",
-  "callback": {
-    "ok": true,
-    "status": 200,
-    "body": "..."
+  "result": "ok"
+}
+```
+
+Outbound message format sent to `智慧财信机器人webhook地址`:
+
+```json
+{
+  "msgtype": "text",
+  "text": {
+    "content": "...assistant response..."
   }
 }
 ```
 
 Notes:
 
-- `callbackUrl` can be configured in UI (field name: `智慧财信机器人webhook地址`) or passed in request body
+- `智慧财信机器人webhook地址` is configured in UI and used as outbound robot send endpoint
 - The UI displays a read-only inbound webhook URL for IM callback configuration (prefers LAN IP instead of localhost)
-- After generating reply, assistant posts callback payload to `callbackUrl`
 - You can override the displayed inbound host via env `CHASINGCLAW_PUBLIC_HOST`
+- For local testing, `/api/webhook/request` still accepts `{ "message", "sessionId", "callbackUrl" }`
 
 ## Config Overview
 

@@ -488,12 +488,35 @@ class WebUIRuntime:
                 "error": str(exc),
             }
 
+    def _is_zhcx_callback_payload(self, payload: dict[str, Any]) -> bool:
+        return "chatid" in payload and "content" in payload
+
+    def _build_zhcx_text_payload(self, reply: str) -> dict[str, Any]:
+        # Wisdom Caixin webhook: single message <= 5000 characters.
+        content = (reply or "").strip() or " "
+        if len(content) > 5000:
+            content = content[:5000]
+        return {
+            "msgtype": "text",
+            "text": {
+                "content": content,
+            },
+        }
+
     def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
-        message = str(payload.get("message") or "").strip()
+        is_zhcx_payload = self._is_zhcx_callback_payload(payload)
+        message = str(payload.get("message") or payload.get("content") or "").strip()
         if not message:
+            if is_zhcx_payload:
+                # Wisdom Caixin callback endpoint expects a strict ack payload.
+                return {"result": "ok"}
             raise ValueError("message is required")
 
-        session_id = str(payload.get("sessionId") or secrets.token_hex(8)).strip()
+        raw_session_id = payload.get("sessionId")
+        if raw_session_id in {None, ""}:
+            raw_session_id = payload.get("chatid")
+        session_id = str(raw_session_id or secrets.token_hex(8)).strip()
+
         config = load_config()
         webhook = config.channels.webhook
         timeout = max(1, int(webhook.timeout_seconds))
@@ -509,12 +532,17 @@ class WebUIRuntime:
             channel="webhook",
         )
 
-        callback_payload = {
-            "type": "chasingclaw.webhook.callback",
-            "sessionId": session_id,
-            "message": message,
-            "reply": chat_result.get("reply", ""),
-        }
+        reply_text = str(chat_result.get("reply", ""))
+        callback_payload: dict[str, Any]
+        if is_zhcx_payload:
+            callback_payload = self._build_zhcx_text_payload(reply_text)
+        else:
+            callback_payload = {
+                "type": "chasingclaw.webhook.callback",
+                "sessionId": session_id,
+                "message": message,
+                "reply": reply_text,
+            }
 
         callback_result: dict[str, Any] | None = None
         if callback_url:
@@ -526,10 +554,14 @@ class WebUIRuntime:
             else:
                 callback_result = self._post_json(callback_url, callback_payload, timeout=timeout)
 
+        if is_zhcx_payload:
+            # Keep the callback response compatible with Wisdom Caixin protocol.
+            return {"result": "ok"}
+
         return {
             "ok": True,
             "sessionId": session_id,
-            "reply": chat_result.get("reply", ""),
+            "reply": reply_text,
             "callback": callback_result,
         }
 
