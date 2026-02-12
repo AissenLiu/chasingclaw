@@ -637,6 +637,11 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/webhook/request":
+            # Wisdom Caixin callback availability check expects this exact payload.
+            self._send_json(200, {"result": "ok"})
+            return
+
         self._send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
