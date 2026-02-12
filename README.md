@@ -18,6 +18,22 @@ pip install -e .
 pip install chasingclaw-ai
 ```
 
+## 运行环境要求
+
+- Python `>= 3.11`
+- 操作系统：macOS / Linux / Windows（建议部署在 Linux 服务器）
+- 网络：
+  - 服务器需可访问你选择的模型供应商 API
+  - 服务器需可访问智慧财信 webhook 出站地址
+  - 智慧财信平台需可访问 chasingclaw 入站地址
+- 端口：
+  - `18789`（Web UI + webhook 入站）
+  - `18790`（gateway，按需启用）
+- 可选依赖：
+  - 若要使用 `bridge` 相关能力（如 WhatsApp bridge 构建），需要 Node.js `>= 20` 和 `npm`
+- 时间要求：
+  - 使用 webhook 签名时请确保服务器时间准确（建议启用 NTP），避免 `DATE` 过期导致验签失败
+
 ## 快速开始
 
 ```bash
@@ -53,16 +69,16 @@ chasingclaw ui --host 0.0.0.0 --port 18789
 
 UI 可配置项：
 
-- 模型供应商（provider）、模型名（model）、API Key
-- `custom` provider 的 API Base URL（仅 `custom` 可填写）
-- `tools.restrictToWorkspace` 开关（限制工具仅访问工作目录）
-- 智慧财信机器人 webhook 出站地址
-- 智慧财信 webhook 请求超时（秒）
-- 智慧财信签名配置（key / secret）
-- 智慧财信回复消息类型（`text` / `markdown` / `link`）
-- 回复消息模板（支持 `{reply}` 占位符）
-- `link` 类型的 `title/messageUrl/btnTitle`
-- 只读展示 chasingclaw 入站地址（用于配置 callback URL）
+- 常用配置（默认显示）：模型供应商（provider）、模型名（model）、API Key、智慧财信机器人 webhook 出站地址、chasingclaw 入站地址（只读）
+- 高级配置（点击“高级配置”后显示）：
+  - `custom` provider 的 API Base URL（仅 `custom` 可填写）
+  - `tools.restrictToWorkspace` 开关（限制工具仅访问工作目录）
+  - 智慧财信 webhook 请求超时（秒）
+  - 智慧财信签名配置（key / secret）
+  - 智慧财信回复消息类型（`text` / `markdown` / `link`）
+  - 回复消息模板（支持 `{reply}` 占位符）
+  - `link` 类型的 `title/messageUrl/btnTitle`
+  - Cron 定时任务配置与管理
 
 UI 交互能力：
 

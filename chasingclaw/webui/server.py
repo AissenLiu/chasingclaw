@@ -86,12 +86,6 @@ UI_HTML = """<!doctype html>
       <label>API Key</label>
       <input id="apiKey" type="password" placeholder="输入后点击保存" />
 
-      <h3>运行配置</h3>
-      <div class="check-row">
-        <input id="restrictToWorkspace" type="checkbox" />
-        <label for="restrictToWorkspace" style="margin:0;">Restrict tools to workspace</label>
-      </div>
-
       <h3>智慧财信Webhook配置</h3>
       <label>智慧财信机器人webhook地址</label>
       <input id="webhookCallbackUrl" placeholder="例如 https://your-im-server/webhook" />
@@ -99,50 +93,60 @@ UI_HTML = """<!doctype html>
       <label>用于配置智慧财信机器人的webhook回调地址</label>
       <input id="inboundWebhookUrl" readonly />
 
-      <div class="row">
-        <div>
-          <label>Webhook Timeout (秒)</label>
-          <input id="webhookTimeoutSeconds" type="number" min="1" step="1" />
+      <button id="advancedToggleBtn" type="button" class="secondary">高级配置</button>
+
+      <div id="advancedSection" style="display:none;">
+        <h3>运行配置</h3>
+        <div class="check-row">
+          <input id="restrictToWorkspace" type="checkbox" />
+          <label for="restrictToWorkspace" style="margin:0;">Restrict tools to workspace</label>
         </div>
-        <div>
-          <label>回复消息类型</label>
-          <select id="webhookMessageType">
-            <option value="text">text</option>
-            <option value="markdown">markdown</option>
-            <option value="link">link</option>
-          </select>
+
+        <div class="row">
+          <div>
+            <label>Webhook Timeout (秒)</label>
+            <input id="webhookTimeoutSeconds" type="number" min="1" step="1" />
+          </div>
+          <div>
+            <label>回复消息类型</label>
+            <select id="webhookMessageType">
+              <option value="text">text</option>
+              <option value="markdown">markdown</option>
+              <option value="link">link</option>
+            </select>
+          </div>
         </div>
+
+        <label>消息模板（支持 {reply} 占位符）</label>
+        <textarea id="webhookMessageTemplate" placeholder="默认: {reply}"></textarea>
+
+        <div class="row">
+          <div>
+            <label>link.title</label>
+            <input id="webhookLinkTitle" placeholder="chasingclaw 回复" />
+          </div>
+          <div>
+            <label>link.btnTitle</label>
+            <input id="webhookLinkButtonTitle" placeholder="查看详情" />
+          </div>
+        </div>
+
+        <label>link.messageUrl（可选）</label>
+        <input id="webhookLinkMessageUrl" placeholder="例如 https://your-site/details" />
+
+        <h3>签名配置（可选）</h3>
+        <div class="row">
+          <div>
+            <label>签名 key</label>
+            <input id="webhookSignKey" placeholder="Authorization 的 key" />
+          </div>
+          <div>
+            <label>签名 secret</label>
+            <input id="webhookSignSecret" type="password" placeholder="Authorization 签名 secret" />
+          </div>
+        </div>
+        <div class="hint">配置后将自动携带 Content-Md5 / Content-Type / DATE / Authorization 请求头。</div>
       </div>
-
-      <label>消息模板（支持 {reply} 占位符）</label>
-      <textarea id="webhookMessageTemplate" placeholder="默认: {reply}"></textarea>
-
-      <div class="row">
-        <div>
-          <label>link.title</label>
-          <input id="webhookLinkTitle" placeholder="chasingclaw 回复" />
-        </div>
-        <div>
-          <label>link.btnTitle</label>
-          <input id="webhookLinkButtonTitle" placeholder="查看详情" />
-        </div>
-      </div>
-
-      <label>link.messageUrl（可选）</label>
-      <input id="webhookLinkMessageUrl" placeholder="例如 https://your-site/details" />
-
-      <h3>签名配置（可选）</h3>
-      <div class="row">
-        <div>
-          <label>签名 key</label>
-          <input id="webhookSignKey" placeholder="Authorization 的 key" />
-        </div>
-        <div>
-          <label>签名 secret</label>
-          <input id="webhookSignSecret" type="password" placeholder="Authorization 签名 secret" />
-        </div>
-      </div>
-      <div class="hint">配置后将自动携带 Content-Md5 / Content-Type / DATE / Authorization 请求头。</div>
 
       <button id="saveBtn">保存配置</button>
       <div class="status" id="cfgStatus"></div>
@@ -163,7 +167,7 @@ UI_HTML = """<!doctype html>
       <div class="status" id="chatStatus"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="cronCard" style="display:none;">
       <h2>Cron 定时任务</h2>
       <div class="row">
         <div>
@@ -275,6 +279,17 @@ function updateCronScheduleInputs() {
   el('cronEverySeconds').disabled = scheduleType !== 'every';
   el('cronExpr').disabled = scheduleType !== 'cron';
   el('cronAt').disabled = scheduleType !== 'at';
+}
+
+function setAdvancedVisible(visible) {
+  el('advancedSection').style.display = visible ? 'block' : 'none';
+  el('cronCard').style.display = visible ? 'block' : 'none';
+  el('advancedToggleBtn').textContent = visible ? '收起高级配置' : '高级配置';
+}
+
+function toggleAdvanced() {
+  const showing = el('advancedSection').style.display !== 'none';
+  setAdvancedVisible(!showing);
 }
 
 async function loadConfig() {
@@ -487,6 +502,7 @@ async function onCronAction(e) {
 
 el('saveBtn').addEventListener('click', saveConfig);
 el('provider').addEventListener('change', updateApiBaseState);
+el('advancedToggleBtn').addEventListener('click', toggleAdvanced);
 el('webhookMessageType').addEventListener('change', updateWebhookMessageTypeState);
 el('sendBtn').addEventListener('click', sendChat);
 el('webhookTestBtn').addEventListener('click', testWebhook);
@@ -506,6 +522,7 @@ el('cronRefreshBtn').addEventListener('click', loadCronJobs);
 el('cronList').addEventListener('click', onCronAction);
 
 (async () => {
+  setAdvancedVisible(false);
   setSessionInfo();
   await loadConfig();
   await loadHistory();
