@@ -89,7 +89,7 @@ UI_HTML = """<!doctype html>
       </div>
       <div class="row" style="margin-top:8px;">
         <button id="newSessionBtn" style="background:#475569">新会话</button>
-        <button id="webhookTestBtn" style="background:#0f766e">测试Webhook</button>
+        <button id="webhookTestBtn" style="background:#0f766e">测试智慧财信发送</button>
       </div>
       <div class="status" id="chatStatus"></div>
     </div>
@@ -219,18 +219,21 @@ async function sendChat() {
 
 async function testWebhook() {
   const input = el('message');
-  const message = (input.value || 'Webhook test from UI').trim();
-  el('chatStatus').textContent = 'Webhook测试中...';
+  const message = (input.value || 'chasingclaw 智慧财信联通测试').trim();
+  el('chatStatus').textContent = '正在向智慧财信机器人发送测试消息...';
   try {
-    const data = await api('/api/webhook/request', {
+    const data = await api('/api/webhook/zhcx-test-send', {
       method: 'POST',
-      body: JSON.stringify({ message, sessionId: sessionId }),
+      body: JSON.stringify({ message }),
     });
-    appendMessage('assistant', '[Webhook] ' + (data.reply || ''));
-    el('chatStatus').textContent = 'Webhook完成';
+    appendMessage('assistant', '[智慧财信测试] 已发送：' + message);
+    if (data.result) {
+      appendMessage('assistant', '[智慧财信测试返回] ' + JSON.stringify(data.result));
+    }
+    el('chatStatus').textContent = '智慧财信测试发送完成';
   } catch (err) {
-    appendMessage('assistant', 'Webhook Error: ' + err.message);
-    el('chatStatus').textContent = 'Webhook失败';
+    appendMessage('assistant', '智慧财信测试失败: ' + err.message);
+    el('chatStatus').textContent = '智慧财信测试失败';
   }
 }
 
@@ -503,6 +506,24 @@ class WebUIRuntime:
             },
         }
 
+    def send_zhcx_test_message(self, payload: dict[str, Any]) -> dict[str, Any]:
+        config = load_config()
+        webhook = config.channels.webhook
+        callback_url = str(webhook.callback_url or "").strip()
+        if not callback_url:
+            raise ValueError("请先在前端配置智慧财信机器人webhook地址")
+
+        timeout = max(1, int(webhook.timeout_seconds))
+        message = str(payload.get("message") or "").strip() or "chasingclaw 智慧财信联通测试"
+        outbound_payload = self._build_zhcx_text_payload(message)
+        result = self._post_json(callback_url, outbound_payload, timeout=timeout)
+        return {
+            "ok": bool(result.get("ok")),
+            "url": callback_url,
+            "payload": outbound_payload,
+            "result": result,
+        }
+
     def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
         is_zhcx_payload = self._is_zhcx_callback_payload(payload)
         message = str(payload.get("message") or payload.get("content") or "").strip()
@@ -660,6 +681,11 @@ class _WebUIHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/chat":
                 result = self.runtime.chat(payload, channel="webui")
+                self._send_json(200, result)
+                return
+
+            if parsed.path == "/api/webhook/zhcx-test-send":
+                result = self.runtime.send_zhcx_test_message(payload)
                 self._send_json(200, result)
                 return
 
