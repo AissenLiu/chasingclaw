@@ -1,5 +1,7 @@
 # chasingclaw
 
+中文文档（Chinese doc）: [README.zh-CN.md](./README.zh-CN.md)
+
 `chasingclaw` is an ultra-lightweight personal AI assistant framework.
 
 ## What's New in This Version
