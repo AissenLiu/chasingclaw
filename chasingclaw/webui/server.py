@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from loguru import logger
 
 from chasingclaw.agent.loop import AgentLoop
 from chasingclaw.bus.queue import MessageBus
@@ -58,14 +59,17 @@ UI_HTML = """<!doctype html>
     .chat-row { display: flex; }
     .chat-row.user { justify-content: flex-end; }
     .chat-row.assistant { justify-content: flex-start; }
+    .chat-row.system { justify-content: center; }
     .msg {
       max-width: 82%; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap;
       word-break: break-word; border: 1px solid transparent;
     }
     .msg.user { background: #1e3a8a; border-color: #1d4ed8; }
     .msg.assistant { background: #064e3b; border-color: #047857; }
+    .msg.system { max-width: 96%; background: #1f2937; border-color: #334155; color: #cbd5e1; font-size: 12px; }
     .msg.pending { opacity: 0.75; font-style: italic; }
     .msg-meta { margin-top: 6px; font-size: 11px; color: #cbd5e1; opacity: 0.7; text-align: right; }
+    .msg-meta.system { text-align: left; }
     .inline-btn { width: auto; margin-top: 0; padding: 6px 10px; }
     .status { font-size: 12px; color: #94a3b8; margin-top: 8px; }
     .hint { font-size: 11px; color: #94a3b8; margin-top: 6px; }
@@ -243,6 +247,8 @@ localStorage.setItem(KEY, sessionId);
 const el = (id) => document.getElementById(id);
 const chatLog = el('chatLog');
 const DEFAULT_PROVIDER_OPTIONS = ['openrouter', 'openai', 'anthropic', 'deepseek', 'custom'];
+let webhookEventCursor = 0;
+let webhookPollTimer = null;
 
 function formatMessageTime(value) {
   if (!value) return new Date().toLocaleTimeString();
@@ -252,11 +258,13 @@ function formatMessageTime(value) {
 }
 
 function appendMessage(role, text, options = {}) {
+  const roleClass = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'system';
+
   const row = document.createElement('div');
-  row.className = 'chat-row ' + (role === 'user' ? 'user' : 'assistant');
+  row.className = 'chat-row ' + roleClass;
 
   const bubble = document.createElement('div');
-  bubble.className = 'msg ' + (role === 'user' ? 'user' : 'assistant');
+  bubble.className = 'msg ' + roleClass;
   if (options.pending) {
     bubble.classList.add('pending');
   }
@@ -266,7 +274,7 @@ function appendMessage(role, text, options = {}) {
   bubble.appendChild(content);
 
   const meta = document.createElement('div');
-  meta.className = 'msg-meta';
+  meta.className = 'msg-meta ' + roleClass;
   meta.textContent = formatMessageTime(options.timestamp);
   bubble.appendChild(meta);
 
@@ -394,6 +402,56 @@ async function loadConfig() {
   el('cfgStatus').textContent = '配置已加载';
 }
 
+function formatWebhookEvent(event) {
+  if (!event) {
+    return '[Webhook] 收到空事件';
+  }
+
+  let text = '[Webhook] ' + (event.summary || event.event || '收到事件');
+  if (event.detail) {
+    try {
+      text += '\n' + JSON.stringify(event.detail, null, 2);
+    } catch (err) {
+      text += '\n(detail parse failed)';
+    }
+  }
+  return text;
+}
+
+async function loadWebhookEvents(options = {}) {
+  const reset = !!options.reset;
+  const since = reset ? 0 : webhookEventCursor;
+  const limit = reset ? 30 : 80;
+  const data = await api('/api/webhook/events?since=' + encodeURIComponent(String(since)) + '&limit=' + encodeURIComponent(String(limit)));
+
+  for (const event of data.events || []) {
+    appendMessage('system', formatWebhookEvent(event), { timestamp: event.timestamp });
+    const eventId = Number(event.id || 0);
+    if (eventId > webhookEventCursor) {
+      webhookEventCursor = eventId;
+    }
+  }
+
+  const lastId = Number(data.lastId || 0);
+  if (lastId > webhookEventCursor) {
+    webhookEventCursor = lastId;
+  }
+}
+
+function startWebhookEventPolling() {
+  if (webhookPollTimer) {
+    clearInterval(webhookPollTimer);
+  }
+
+  webhookPollTimer = window.setInterval(async () => {
+    try {
+      await loadWebhookEvents();
+    } catch (err) {
+      // Keep silent for temporary polling errors.
+    }
+  }, 2500);
+}
+
 async function loadHistory() {
   chatLog.innerHTML = '';
   const data = await api('/api/history?sessionId=' + encodeURIComponent(sessionId));
@@ -402,6 +460,9 @@ async function loadHistory() {
       appendMessage(item.role === 'user' ? 'user' : 'assistant', item.content || '', { timestamp: item.timestamp });
     }
   }
+
+  webhookEventCursor = 0;
+  await loadWebhookEvents({ reset: true });
 }
 
 async function saveConfig() {
@@ -602,11 +663,18 @@ el('cronList').addEventListener('click', onCronAction);
     await loadHistory();
     updateCronScheduleInputs();
     await loadCronJobs();
+    startWebhookEventPolling();
   } catch (err) {
     el('cfgStatus').textContent = '配置加载失败：' + (err.message || String(err));
     // Fallback: keep provider selector/inbound callback usable even if /api/config fails.
     setProviderOptions(DEFAULT_PROVIDER_OPTIONS, 'openrouter');
     el('inboundWebhookUrl').value = window.location.origin + '/api/webhook/request';
+    try {
+      await loadWebhookEvents({ reset: true });
+    } catch (_) {
+      // Ignore fallback polling bootstrap failures.
+    }
+    startWebhookEventPolling();
   }
 })();
 </script>
@@ -622,6 +690,9 @@ class WebUIRuntime:
         self.host = host
         self.port = port
         self._lock = threading.Lock()
+        self._webhook_events: list[dict[str, Any]] = []
+        self._webhook_event_seq = 0
+        self._webhook_event_limit = 300
 
     def _detect_lan_ip(self) -> str | None:
         for target in ("8.8.8.8", "1.1.1.1"):
@@ -715,6 +786,100 @@ class WebUIRuntime:
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return False
+
+    def _format_now(self) -> str:
+        return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+    def _sanitize_for_debug(self, value: Any, depth: int = 0) -> Any:
+        if depth > 4:
+            return "..."
+
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for key, raw in value.items():
+                name = str(key)
+                lowered = name.lower()
+                if lowered in {"authorization", "api_key", "apikey", "secret", "sign_secret", "webhooksignsecret"}:
+                    sanitized[name] = "***"
+                else:
+                    sanitized[name] = self._sanitize_for_debug(raw, depth + 1)
+            return sanitized
+
+        if isinstance(value, list):
+            return [self._sanitize_for_debug(item, depth + 1) for item in value[:20]]
+
+        if isinstance(value, str):
+            text = value.strip()
+            if len(text) > 1200:
+                return text[:1200] + "...(truncated)"
+            return text
+
+        return value
+
+    def _clip(self, text: str, limit: int = 220) -> str:
+        clean = (text or "").strip().replace("\n", " ")
+        if len(clean) <= limit:
+            return clean
+        return clean[:limit] + "...(truncated)"
+
+    def record_webhook_event(
+        self,
+        event: str,
+        summary: str,
+        *,
+        session_id: str = "",
+        detail: Any | None = None,
+        level: str = "info",
+    ) -> None:
+        payload: dict[str, Any] = {
+            "id": 0,
+            "timestamp": self._format_now(),
+            "event": event,
+            "summary": summary,
+            "sessionId": session_id or "",
+        }
+        if detail is not None:
+            payload["detail"] = self._sanitize_for_debug(detail)
+
+        with self._lock:
+            self._webhook_event_seq += 1
+            payload["id"] = self._webhook_event_seq
+            self._webhook_events.append(payload)
+            if len(self._webhook_events) > self._webhook_event_limit:
+                self._webhook_events = self._webhook_events[-self._webhook_event_limit :]
+
+        log_line = f"webhook[{event}] sid={session_id or '-'} {summary}"
+        if "detail" in payload:
+            detail_text = json.dumps(payload["detail"], ensure_ascii=False)
+            if len(detail_text) > 1200:
+                detail_text = detail_text[:1200] + "...(truncated)"
+            log_line = f"{log_line} | detail={detail_text}"
+
+        if level == "error":
+            logger.error(log_line)
+        elif level == "warning":
+            logger.warning(log_line)
+        else:
+            logger.info(log_line)
+
+    def list_webhook_events(self, since_id: int = 0, limit: int = 80) -> dict[str, Any]:
+        if limit <= 0:
+            limit = 1
+        limit = min(limit, 300)
+
+        with self._lock:
+            if since_id > 0:
+                events = [item for item in self._webhook_events if int(item.get("id", 0)) > since_id]
+                if len(events) > limit:
+                    events = events[-limit:]
+            else:
+                events = self._webhook_events[-limit:]
+            last_id = self._webhook_event_seq
+
+        return {
+            "events": events,
+            "lastId": last_id,
+        }
 
     def load_ui_config(self) -> dict[str, Any]:
         config = load_config()
@@ -990,9 +1155,21 @@ class WebUIRuntime:
         timeout = max(1, int(webhook.timeout_seconds))
         message = str(payload.get("message") or "").strip() or "chasingclaw 智慧财信联通测试"
         outbound_payload = self._build_zhcx_payload_from_text(message, webhook.message_type, webhook)
+        self.record_webhook_event(
+            "test_send",
+            f"前端触发测试发送 -> {callback_url}",
+            detail={"payload": outbound_payload},
+        )
         result = self._post_zhcx_payload(callback_url, outbound_payload, timeout=timeout, webhook=webhook)
+        ok = bool(result.get("ok"))
+        self.record_webhook_event(
+            "test_result",
+            f"测试发送{'成功' if ok else '失败'}",
+            detail=result,
+            level="info" if ok else "warning",
+        )
         return {
-            "ok": bool(result.get("ok")),
+            "ok": ok,
             "url": callback_url,
             "payload": outbound_payload,
             "result": result,
@@ -1000,17 +1177,32 @@ class WebUIRuntime:
 
     def handle_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
         is_zhcx_payload = self._is_zhcx_callback_payload(payload)
-        message = str(payload.get("message") or payload.get("content") or "").strip()
-        if not message:
-            if is_zhcx_payload:
-                # Wisdom Caixin callback endpoint expects a strict ack payload.
-                return {"result": "ok"}
-            raise ValueError("message is required")
-
         raw_session_id = payload.get("sessionId")
         if raw_session_id in {None, ""}:
             raw_session_id = payload.get("chatid")
         session_id = str(raw_session_id or secrets.token_hex(8)).strip()
+
+        message = str(payload.get("message") or payload.get("content") or "").strip()
+        chat_id = str(payload.get("chatid") or "").strip()
+        source = "智慧财信" if is_zhcx_payload else "通用"
+
+        self.record_webhook_event(
+            "inbound",
+            f"收到{source}入站消息 chatid={chat_id or '-'} content={self._clip(message or '<empty>', 180)}",
+            session_id=session_id,
+            detail={"payload": payload},
+        )
+
+        if not message:
+            if is_zhcx_payload:
+                self.record_webhook_event(
+                    "ack_only",
+                    "消息内容为空，按智慧财信协议返回 {'result':'ok'}",
+                    session_id=session_id,
+                    level="warning",
+                )
+                return {"result": "ok"}
+            raise ValueError("message is required")
 
         config = load_config()
         webhook = config.channels.webhook
@@ -1018,6 +1210,20 @@ class WebUIRuntime:
 
         callback_url = str(payload.get("callbackUrl") or webhook.callback_url or "").strip()
         current_request_url = str(payload.get("_currentRequestUrl") or "").strip()
+
+        if callback_url:
+            self.record_webhook_event(
+                "callback_target",
+                f"准备回调到: {callback_url}",
+                session_id=session_id,
+            )
+        else:
+            self.record_webhook_event(
+                "callback_target",
+                "未配置回调地址，仅处理入站消息不回推",
+                session_id=session_id,
+                level="warning",
+            )
 
         chat_result = self.chat(
             {
@@ -1028,6 +1234,12 @@ class WebUIRuntime:
         )
 
         reply_text = str(chat_result.get("reply", ""))
+        self.record_webhook_event(
+            "agent_reply",
+            f"AI 回复: {self._clip(reply_text, 220)}",
+            session_id=session_id,
+        )
+
         callback_payload: dict[str, Any]
         if is_zhcx_payload:
             callback_payload = self._build_zhcx_outbound_payload(reply_text, webhook)
@@ -1046,13 +1258,45 @@ class WebUIRuntime:
                     "ok": False,
                     "error": "callback_url cannot be the same as current request endpoint",
                 }
+                self.record_webhook_event(
+                    "callback_result",
+                    "回调地址与入站地址相同，已跳过发送",
+                    session_id=session_id,
+                    detail=callback_result,
+                    level="warning",
+                )
             else:
+                self.record_webhook_event(
+                    "callback_send",
+                    f"开始发送回调 -> {callback_url}",
+                    session_id=session_id,
+                    detail={"payload": callback_payload},
+                )
                 if is_zhcx_payload:
                     callback_result = self._post_zhcx_payload(callback_url, callback_payload, timeout=timeout, webhook=webhook)
                 else:
                     callback_result = self._post_json(callback_url, callback_payload, timeout=timeout)
 
+                ok = bool(callback_result.get("ok"))
+                status = callback_result.get("status")
+                if status is None:
+                    summary = f"回调发送{'成功' if ok else '失败'}"
+                else:
+                    summary = f"回调发送{'成功' if ok else '失败'} status={status}"
+                self.record_webhook_event(
+                    "callback_result",
+                    summary,
+                    session_id=session_id,
+                    detail=callback_result,
+                    level="info" if ok else "warning",
+                )
+
         if is_zhcx_payload:
+            self.record_webhook_event(
+                "ack_response",
+                "已向智慧财信返回 {'result':'ok'}",
+                session_id=session_id,
+            )
             # Keep the callback response compatible with Wisdom Caixin protocol.
             return {"result": "ok"}
 
@@ -1259,8 +1503,24 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/webhook/events":
+            query = parse_qs(parsed.query)
+            try:
+                since_id = int((query.get("since") or ["0"])[0] or 0)
+                limit = int((query.get("limit") or ["80"])[0] or 80)
+            except ValueError:
+                self._send_json(400, {"error": "invalid query parameter"})
+                return
+            self._send_json(200, self.runtime.list_webhook_events(since_id=since_id, limit=limit))
+            return
+
         if parsed.path == "/api/webhook/request":
             # Wisdom Caixin callback availability check expects this exact payload.
+            self.runtime.record_webhook_event(
+                "validation_get",
+                "收到智慧财信可用性校验 GET 请求",
+                detail={"client": self.client_address[0] if self.client_address else ""},
+            )
             self._send_json(200, {"result": "ok"})
             return
 
@@ -1271,6 +1531,13 @@ class _WebUIHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
         except ValueError as exc:
+            if parsed.path == "/api/webhook/request":
+                self.runtime.record_webhook_event(
+                    "invalid_json",
+                    f"入站回调 JSON 解析失败: {exc}",
+                    detail={"path": parsed.path},
+                    level="warning",
+                )
             self._send_json(400, {"error": str(exc)})
             return
 
@@ -1312,15 +1579,30 @@ class _WebUIHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/webhook/request":
                 host = self.headers.get("Host") or f"{self.runtime._public_host()}:{self.runtime.port}"
-                payload["_currentRequestUrl"] = f"http://{host}{parsed.path}"
+                proto = self.headers.get("X-Forwarded-Proto") or "http"
+                payload["_currentRequestUrl"] = f"{proto}://{host}{parsed.path}"
                 result = self.runtime.handle_webhook(payload)
                 self._send_json(200, result)
                 return
 
             self._send_json(404, {"error": "not found"})
         except ValueError as exc:
+            if parsed.path == "/api/webhook/request":
+                self.runtime.record_webhook_event(
+                    "handler_error",
+                    f"处理入站回调失败: {exc}",
+                    detail={"path": parsed.path, "payload": payload},
+                    level="warning",
+                )
             self._send_json(400, {"error": str(exc)})
         except Exception as exc:
+            if parsed.path == "/api/webhook/request":
+                self.runtime.record_webhook_event(
+                    "handler_error",
+                    f"处理入站回调异常: {exc}",
+                    detail={"path": parsed.path, "payload": payload},
+                    level="error",
+                )
             self._send_json(500, {"error": str(exc)})
 
 
