@@ -1449,20 +1449,43 @@ class _WebUIHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _read_json(self) -> dict[str, Any]:
+        self._last_raw_body = b""
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
         if length <= 0:
             return {}
+
         raw = self.rfile.read(length)
+        self._last_raw_body = raw or b""
         if not raw:
             return {}
+
         try:
             data = json.loads(raw.decode("utf-8"))
             return data if isinstance(data, dict) else {}
         except json.JSONDecodeError:
             raise ValueError("invalid JSON body")
+
+    def _request_debug_info(self, include_raw_body: bool = False) -> dict[str, Any]:
+        info: dict[str, Any] = {
+            "client": self.client_address[0] if self.client_address else "",
+            "path": self.path,
+            "contentType": self.headers.get("Content-Type", ""),
+            "contentLength": self.headers.get("Content-Length", ""),
+            "headers": {k: v for k, v in self.headers.items()},
+        }
+        if include_raw_body:
+            raw_body = getattr(self, "_last_raw_body", b"")
+            if raw_body:
+                raw_preview = raw_body.decode("utf-8", errors="replace")
+                if len(raw_preview) > 2000:
+                    raw_preview = raw_preview[:2000] + "...(truncated)"
+            else:
+                raw_preview = ""
+            info["rawBodyPreview"] = raw_preview
+        return info
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -1535,7 +1558,10 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 self.runtime.record_webhook_event(
                     "invalid_json",
                     f"入站回调 JSON 解析失败: {exc}",
-                    detail={"path": parsed.path},
+                    detail={
+                        "path": parsed.path,
+                        "http": self._request_debug_info(include_raw_body=True),
+                    },
                     level="warning",
                 )
             self._send_json(400, {"error": str(exc)})
@@ -1580,6 +1606,14 @@ class _WebUIHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/webhook/request":
                 host = self.headers.get("Host") or f"{self.runtime._public_host()}:{self.runtime.port}"
                 proto = self.headers.get("X-Forwarded-Proto") or "http"
+                self.runtime.record_webhook_event(
+                    "inbound_http",
+                    f"收到Webhook HTTP POST content-type={self.headers.get('Content-Type') or '-'} content-length={self.headers.get('Content-Length') or '0'}",
+                    detail={
+                        "http": self._request_debug_info(include_raw_body=True),
+                        "payloadKeys": sorted(str(k) for k in payload.keys()),
+                    },
+                )
                 payload["_currentRequestUrl"] = f"{proto}://{host}{parsed.path}"
                 result = self.runtime.handle_webhook(payload)
                 self._send_json(200, result)
@@ -1591,7 +1625,11 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 self.runtime.record_webhook_event(
                     "handler_error",
                     f"处理入站回调失败: {exc}",
-                    detail={"path": parsed.path, "payload": payload},
+                    detail={
+                        "path": parsed.path,
+                        "payload": payload,
+                        "http": self._request_debug_info(include_raw_body=True),
+                    },
                     level="warning",
                 )
             self._send_json(400, {"error": str(exc)})
@@ -1600,7 +1638,11 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 self.runtime.record_webhook_event(
                     "handler_error",
                     f"处理入站回调异常: {exc}",
-                    detail={"path": parsed.path, "payload": payload},
+                    detail={
+                        "path": parsed.path,
+                        "payload": payload,
+                        "http": self._request_debug_info(include_raw_body=True),
+                    },
                     level="error",
                 )
             self._send_json(500, {"error": str(exc)})
