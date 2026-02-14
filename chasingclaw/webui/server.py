@@ -1448,16 +1448,59 @@ class _WebUIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _read_chunked_body(self, max_bytes: int = 2_000_000) -> bytes:
+        body = bytearray()
+
+        while True:
+            size_line = self.rfile.readline(65537)
+            if not size_line:
+                raise ValueError("invalid chunked body")
+
+            size_token = size_line.split(b";", 1)[0].strip()
+            try:
+                chunk_size = int(size_token, 16)
+            except ValueError as exc:
+                raise ValueError("invalid chunked body") from exc
+
+            if chunk_size < 0:
+                raise ValueError("invalid chunked body")
+
+            if chunk_size == 0:
+                # Trailer headers end with an empty line.
+                while True:
+                    trailer_line = self.rfile.readline(65537)
+                    if not trailer_line or trailer_line in {b"\r\n", b"\n"}:
+                        return bytes(body)
+                
+            if len(body) + chunk_size > max_bytes:
+                raise ValueError("request body too large")
+
+            chunk = self.rfile.read(chunk_size)
+            if len(chunk) != chunk_size:
+                raise ValueError("invalid chunked body")
+            body.extend(chunk)
+
+            chunk_ending = self.rfile.readline(65537)
+            if chunk_ending not in {b"\r\n", b"\n"}:
+                raise ValueError("invalid chunked body")
+
     def _read_json(self) -> dict[str, Any]:
         self._last_raw_body = b""
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            length = 0
-        if length <= 0:
-            return {}
 
-        raw = self.rfile.read(length)
+        transfer_encoding = (self.headers.get("Transfer-Encoding") or "").lower()
+        raw = b""
+
+        if "chunked" in transfer_encoding:
+            raw = self._read_chunked_body()
+        else:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+
+            if length > 0:
+                raw = self.rfile.read(length)
+
         self._last_raw_body = raw or b""
         if not raw:
             return {}
@@ -1465,8 +1508,8 @@ class _WebUIHandler(BaseHTTPRequestHandler):
         try:
             data = json.loads(raw.decode("utf-8"))
             return data if isinstance(data, dict) else {}
-        except json.JSONDecodeError:
-            raise ValueError("invalid JSON body")
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid JSON body") from exc
 
     def _request_debug_info(self, include_raw_body: bool = False) -> dict[str, Any]:
         info: dict[str, Any] = {
@@ -1608,7 +1651,7 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 proto = self.headers.get("X-Forwarded-Proto") or "http"
                 self.runtime.record_webhook_event(
                     "inbound_http",
-                    f"收到Webhook HTTP POST content-type={self.headers.get('Content-Type') or '-'} content-length={self.headers.get('Content-Length') or '0'}",
+                    f"收到Webhook HTTP POST content-type={self.headers.get('Content-Type') or '-'} content-length={self.headers.get('Content-Length') or '0'} transfer-encoding={self.headers.get('Transfer-Encoding') or '-'}",
                     detail={
                         "http": self._request_debug_info(include_raw_body=True),
                         "payloadKeys": sorted(str(k) for k in payload.keys()),
