@@ -2,7 +2,7 @@ param(
   [ValidateSet("start", "stop", "status", "restart")]
   [string]$Action = "start",
   [int]$Port = 18789,
-  [string]$Host = "0.0.0.0"
+  [string]$BindHost = "0.0.0.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,7 +83,7 @@ function Start-Ui {
   }
 
   $exe = Resolve-ChasingclawExe
-  $args = @("ui", "--host", $Host, "--port", $Port)
+  $args = @("ui", "--host", $BindHost, "--port", $Port)
 
   $proc = Start-Process `
     -FilePath $exe `
