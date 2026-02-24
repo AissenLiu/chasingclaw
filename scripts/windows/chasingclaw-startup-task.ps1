@@ -17,8 +17,8 @@ if (-not (Test-Path $UiBat)) {
   throw "Cannot find script: $UiBat"
 }
 
-function Invoke-Schtasks([string[]]$Args) {
-  $proc = Start-Process -FilePath "schtasks.exe" -ArgumentList $Args -Wait -PassThru -NoNewWindow
+function Invoke-Schtasks([string[]]$SchtaskArgs) {
+  $proc = Start-Process -FilePath "schtasks.exe" -ArgumentList $SchtaskArgs -Wait -PassThru -NoNewWindow
   if ($proc.ExitCode -ne 0) {
     throw "schtasks failed with exit code $($proc.ExitCode)"
   }
@@ -28,7 +28,7 @@ function Install-Task {
   $schedule = if ($Trigger -eq "onstart") { "ONSTART" } else { "ONLOGON" }
   $taskRun = ('"{0}" start' -f $UiBat)
 
-  $args = @(
+  $taskArgs = @(
     "/Create",
     "/TN", $TaskName,
     "/SC", $schedule,
@@ -38,12 +38,12 @@ function Install-Task {
 
   if ($Trigger -eq "onstart") {
     # ONSTART usually requires elevated PowerShell
-    $args += @("/RU", "SYSTEM")
+    $taskArgs += @("/RU", "SYSTEM")
   } else {
-    $args += @("/RL", "HIGHEST", "/RU", $env:USERNAME)
+    $taskArgs += @("/RL", "HIGHEST", "/RU", $env:USERNAME)
   }
 
-  Invoke-Schtasks $args
+  Invoke-Schtasks $taskArgs
   Write-Host "Installed task '$TaskName' with trigger '$Trigger'."
   Write-Host "Check task: schtasks /Query /TN $TaskName /V /FO LIST"
 }

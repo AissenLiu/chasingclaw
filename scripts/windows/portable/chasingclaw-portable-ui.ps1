@@ -93,7 +93,7 @@ function Start-Ui {
     throw "Failed to start chasingclaw UI portable executable. Check logs: $StdErrLog"
   }
 
-  Save-Pid -pid $proc.Id
+  Save-Pid -uiPid $proc.Id
 
   Write-Host "Started chasingclaw UI in background. PID=$($proc.Id)"
   Write-Host "Open: http://localhost:$Port"
