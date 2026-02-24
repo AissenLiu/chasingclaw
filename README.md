@@ -157,6 +157,26 @@ scripts\windows\chasingclaw-startup-task.bat run
 scripts\windows\chasingclaw-startup-task.bat remove
 ```
 
+## scripts 目录说明（Windows）
+
+| 脚本 | 用途 |
+| --- | --- |
+| `scripts/windows/chasingclaw-ui.bat` | 源码部署场景的一键入口（默认执行 `start`） |
+| `scripts/windows/chasingclaw-ui.ps1` | 源码部署场景后台管理：`start/stop/status/restart` |
+| `scripts/windows/chasingclaw-startup-task.bat` | 计划任务管理入口（默认执行 `install`） |
+| `scripts/windows/chasingclaw-startup-task.ps1` | 使用 `schtasks` 安装/删除/查看/立即运行开机自启任务 |
+| `scripts/windows/build-portable.bat` | 免安装绿色版打包入口 |
+| `scripts/windows/build-portable.ps1` | 使用 PyInstaller `--onedir` 构建绿色版目录（可选打 zip） |
+| `scripts/windows/portable_ui_entry.py` | 绿色版 `chasingclaw-ui.exe` 的入口脚本 |
+| `scripts/windows/portable/chasingclaw-portable-ui.bat` | 绿色版运行脚本模板（会复制到 `dist/chasingclaw-portable`） |
+| `scripts/windows/portable/chasingclaw-portable-ui.ps1` | 绿色版后台管理模板脚本 |
+| `scripts/windows/portable/README-PORTABLE.txt` | 绿色版包内使用说明模板 |
+
+说明：
+
+- `scripts/windows/__pycache__/` 是 Python 自动生成缓存，可忽略。
+- 如果只关注“目标机一键启动”，主要看绿色包中的 `chasingclaw-portable-ui.bat`。
+
 ## Web UI 使用（端口 18789）
 
 启动：
