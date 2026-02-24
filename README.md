@@ -101,6 +101,21 @@ chasingclaw-portable-ui.bat restart
 - 运行日志在绿色包目录 `logs/`
 - 数据目录仍为 `%USERPROFILE%\.chasingclaw`
 
+### 3) GitHub Actions 自动打包（可选）
+
+已提供工作流：
+
+- `.github/workflows/windows-portable.yml`
+
+触发方式：
+
+- 推送到 `main`（且涉及 `chasingclaw/`、`scripts/windows/`、`pyproject.toml` 或该工作流文件）
+- 在 GitHub Actions 页面手动点击 `Run workflow`
+
+产物下载：
+
+- 进入 Actions 对应任务，在 `Artifacts` 下载 `chasingclaw-portable-windows`
+
 ## Windows 一键后台启动
 
 已提供脚本：
