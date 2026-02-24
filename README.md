@@ -55,6 +55,52 @@ chasingclaw status
 - `chasingclaw channels status`：查看渠道状态
 - `chasingclaw cron ...`：定时任务管理
 
+## Windows 免安装绿色版（推荐内网分发）
+
+如果你希望在 Windows 内网机器上做到“解压即用、无需安装 Python/依赖”，可以使用 PyInstaller `--onedir` 方案。
+
+### 1) 在打包机生成绿色包
+
+已提供脚本：
+
+- `scripts/windows/build-portable.bat`
+- `scripts/windows/build-portable.ps1`
+- `scripts/windows/portable_ui_entry.py`
+
+在项目根目录执行：
+
+```bat
+scripts\windows\build-portable.bat -Clean -Zip
+```
+
+构建产物：
+
+- 目录：`dist\chasingclaw-portable`
+- 压缩包（可选）：`dist\chasingclaw-portable.zip`
+
+### 2) 在目标机一键启动
+
+将 `dist\chasingclaw-portable`（或 zip 解压后的目录）拷贝到目标机，双击：
+
+```bat
+chasingclaw-portable-ui.bat
+```
+
+可选动作：
+
+```bat
+chasingclaw-portable-ui.bat status
+chasingclaw-portable-ui.bat stop
+chasingclaw-portable-ui.bat restart
+```
+
+说明：
+
+- 默认后台启动 `chasingclaw-ui.exe --host 0.0.0.0 --port 18789`
+- 不依赖目标机 Python 环境
+- 运行日志在绿色包目录 `logs/`
+- 数据目录仍为 `%USERPROFILE%\.chasingclaw`
+
 ## Windows 一键后台启动
 
 已提供脚本：
