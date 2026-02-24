@@ -50,12 +50,12 @@ function Clear-PidFile {
 }
 
 function Get-RunningProcessFromPidFile {
-  $pid = Read-PidFile
-  if (-not $pid) {
+  $uiPid = Read-PidFile
+  if (-not $uiPid) {
     return $null
   }
 
-  $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+  $proc = Get-Process -Id $uiPid -ErrorAction SilentlyContinue
   if (-not $proc) {
     Clear-PidFile
     return $null
@@ -64,8 +64,8 @@ function Get-RunningProcessFromPidFile {
   return $proc
 }
 
-function Save-Pid([int]$pid) {
-  Set-Content -Path $PidFile -Value $pid -Encoding ASCII
+function Save-Pid([int]$uiPid) {
+  Set-Content -Path $PidFile -Value $uiPid -Encoding ASCII
 }
 
 function Start-Ui {
