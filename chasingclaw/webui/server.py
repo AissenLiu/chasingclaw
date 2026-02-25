@@ -10,6 +10,7 @@ import os
 import secrets
 import socket
 import threading
+import traceback
 import webbrowser
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -306,7 +307,15 @@ async function api(path, options = {}) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || ('HTTP ' + res.status));
+    let message = data.error || ('HTTP ' + res.status);
+    if (data.detail) {
+      try {
+        message += '\\n' + JSON.stringify(data.detail, null, 2);
+      } catch (_) {
+        message += '\\n' + String(data.detail);
+      }
+    }
+    throw new Error(message);
   }
   return data;
 }
@@ -1696,7 +1705,16 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                     },
                     level="warning",
                 )
-            self._send_json(400, {"error": str(exc)})
+            self._send_json(
+                400,
+                {
+                    "error": str(exc),
+                    "detail": {
+                        "type": type(exc).__name__,
+                        "path": parsed.path,
+                    },
+                },
+            )
         except Exception as exc:
             if parsed.path == "/api/webhook/request":
                 self.runtime.record_webhook_event(
@@ -1709,7 +1727,13 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                     },
                     level="error",
                 )
-            self._send_json(500, {"error": str(exc)})
+            detail: dict[str, Any] = {
+                "type": type(exc).__name__,
+                "path": parsed.path,
+            }
+            if parsed.path == "/api/chat":
+                detail["traceback"] = traceback.format_exc(limit=8)
+            self._send_json(500, {"error": str(exc), "detail": detail})
 
 
 class WebUIServer:

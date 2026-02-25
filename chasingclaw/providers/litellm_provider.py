@@ -131,28 +131,53 @@ class LiteLLMProvider(LLMProvider):
                     kwargs.update(overrides)
                     return
     
-    def _format_error(self, err: Exception) -> str:
-        """Format provider errors with HTTP status/body when available."""
-        parts: list[str] = [str(err)]
+    def _sanitize_text(self, value: Any, limit: int = 1200) -> str:
+        text = str(value).strip()
+        if self.api_key:
+            text = text.replace(self.api_key, "***")
+        if len(text) > limit:
+            return text[:limit] + "...(truncated)"
+        return text
+
+    def _format_error(self, err: Exception, context: dict[str, Any] | None = None) -> str:
+        """Format provider errors with detailed diagnostics for UI debugging."""
+        lines: list[str] = ["Error calling LLM:"]
+        lines.append(f"- type: {type(err).__name__}")
+        lines.append(f"- message: {self._sanitize_text(err)}")
+
+        status = self._status_code(err)
+        if status is not None:
+            lines.append(f"- status: {status}")
 
         response = getattr(err, "response", None)
         if response is not None:
-            status = getattr(response, "status_code", None)
-            if status is not None:
-                parts.append(f"status={status}")
-
             try:
                 body = response.text
             except Exception:
                 body = ""
-
             if body:
-                body = body.strip()
-                if len(body) > 800:
-                    body = body[:800] + "...(truncated)"
-                parts.append(f"body={body}")
+                lines.append(f"- response_body: {self._sanitize_text(body)}")
 
-        return " | ".join(parts)
+        for attr in ("body", "error", "message", "status_code"):
+            if not hasattr(err, attr):
+                continue
+            value = getattr(err, attr)
+            if value in (None, ""):
+                continue
+            if attr == "status_code" and status is not None:
+                continue
+            lines.append(f"- {attr}: {self._sanitize_text(value)}")
+
+        if context:
+            context_lines: list[str] = []
+            for key, value in context.items():
+                if value in (None, "", []):
+                    continue
+                context_lines.append(f"{key}={self._sanitize_text(value, limit=300)}")
+            if context_lines:
+                lines.append(f"- context: {'; '.join(context_lines)}")
+
+        return "\n".join(lines)
 
     def _status_code(self, err: Exception) -> int | None:
         response = getattr(err, "response", None)
@@ -220,12 +245,14 @@ class LiteLLMProvider(LLMProvider):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        
+
+        retried_without_tools = False
         try:
             response = await acompletion(**kwargs)
             return self._parse_response(response)
         except Exception as e:
             if self._can_retry_without_tools(e, tools_used=bool(tools)):
+                retried_without_tools = True
                 retry_kwargs = dict(kwargs)
                 retry_kwargs.pop("tools", None)
                 retry_kwargs.pop("tool_choice", None)
@@ -236,7 +263,16 @@ class LiteLLMProvider(LLMProvider):
                     e = retry_err
             # Return error as content for graceful handling
             return LLMResponse(
-                content=f"Error calling LLM: {self._format_error(e)}",
+                content=self._format_error(
+                    e,
+                    context={
+                        "provider_name": self.provider_name or "auto",
+                        "api_base": self.api_base or "",
+                        "model": model,
+                        "tools_count": len(tools or []),
+                        "retried_without_tools": retried_without_tools,
+                    },
+                ),
                 finish_reason="error",
             )
     
