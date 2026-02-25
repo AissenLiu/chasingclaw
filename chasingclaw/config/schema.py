@@ -243,7 +243,7 @@ class ToolsConfig(BaseModel):
 class UIConfig(BaseModel):
     """Web UI preference settings."""
 
-    selected_provider: str = ""  # e.g. "openrouter", "anthropic", "custom"
+    selected_provider: str = ""  # e.g. "openrouter", "anthropic", "custom", "intranet"
 
 
 class Config(BaseSettings):

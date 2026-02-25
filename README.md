@@ -208,7 +208,7 @@ UI 可配置项：
 
 - 常用配置（默认显示）：模型供应商（provider）、模型名（model）、API Key、智慧财信机器人 webhook 出站地址、chasingclaw 入站地址（只读）
 - 高级配置（点击“高级配置”后显示）：
-  - `custom` provider 的 API Base URL（仅 `custom` 可填写）
+  - `custom` / `intranet（内网模型，OpenAI兼容）` 的 API Base URL（仅这两个选项可填写）
   - `tools.restrictToWorkspace` 开关（限制工具仅访问工作目录）
   - 智慧财信 webhook 请求超时（秒）
   - 智慧财信签名配置（key / secret）

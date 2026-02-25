@@ -246,7 +246,10 @@ localStorage.setItem(KEY, sessionId);
 
 const el = (id) => document.getElementById(id);
 const chatLog = el('chatLog');
-const DEFAULT_PROVIDER_OPTIONS = ['openrouter', 'openai', 'anthropic', 'deepseek', 'custom'];
+const DEFAULT_PROVIDER_OPTIONS = ['openrouter', 'openai', 'anthropic', 'deepseek', 'custom', 'intranet'];
+const PROVIDER_LABELS = {
+  intranet: 'intranet（内网模型 / OpenAI兼容）',
+};
 let webhookEventCursor = 0;
 let webhookPollTimer = null;
 
@@ -308,17 +311,18 @@ function setSessionInfo() {
   el('sessionInfo').textContent = 'Session: ' + sessionId;
 }
 
-function isCustomProvider() {
-  return el('provider').value === 'custom';
+function isApiBaseProvider() {
+  const provider = el('provider').value;
+  return provider === 'custom' || provider === 'intranet';
 }
 
 function updateApiBaseState() {
   const input = el('apiBase');
-  const custom = isCustomProvider();
-  input.disabled = !custom;
-  if (!custom) {
+  const enabled = isApiBaseProvider();
+  input.disabled = !enabled;
+  if (!enabled) {
     input.value = '';
-    input.placeholder = '仅 custom 可填写';
+    input.placeholder = '仅 custom / intranet 可填写';
   } else {
     input.placeholder = '例如 http://localhost:8000/v1';
   }
@@ -356,7 +360,7 @@ function setProviderOptions(options, selected) {
   for (const p of options) {
     const option = document.createElement('option');
     option.value = p;
-    option.textContent = p;
+    option.textContent = PROVIDER_LABELS[p] || p;
     provider.appendChild(option);
   }
 
@@ -380,7 +384,7 @@ async function loadConfig() {
   setProviderOptions(options, data.provider || options[0] || 'openrouter');
 
   el('model').value = data.model || '';
-  if (isCustomProvider()) {
+  if (isApiBaseProvider()) {
     el('apiBase').value = data.apiBase || '';
   }
   el('apiKey').value = data.apiKey || '';
@@ -471,7 +475,7 @@ async function saveConfig() {
     provider: el('provider').value,
     model: el('model').value,
     apiKey: el('apiKey').value,
-    apiBase: isCustomProvider() ? el('apiBase').value : '',
+    apiBase: isApiBaseProvider() ? el('apiBase').value : '',
     restrictToWorkspace: el('restrictToWorkspace').checked,
     webhookCallbackUrl: el('webhookCallbackUrl').value,
     webhookTimeoutSeconds: Number(el('webhookTimeoutSeconds').value || 15),
@@ -730,13 +734,13 @@ class WebUIRuntime:
         return f"http://{self._public_host()}:{self.port}/api/webhook/request"
 
     def _provider_options(self) -> list[str]:
-        return [spec.name for spec in PROVIDERS] + ["custom"]
+        return [spec.name for spec in PROVIDERS] + ["custom", "intranet"]
 
     def _make_provider(self, config: Any) -> LiteLLMProvider:
         model = config.agents.defaults.model
         selected = (config.ui.selected_provider or "").strip().lower()
 
-        # Custom mode: use OpenAI-compatible endpoint provided by user
+        # Custom mode: keep legacy routing behavior, use user-provided API base as-is.
         if selected == "custom":
             provider_cfg = config.providers.openai
             if not (provider_cfg and provider_cfg.api_key) and not model.startswith("bedrock/"):
@@ -746,10 +750,23 @@ class WebUIRuntime:
                 api_base=provider_cfg.api_base if provider_cfg else None,
                 default_model=model,
                 extra_headers=provider_cfg.extra_headers if provider_cfg else None,
+                provider_name=None,
+            )
+
+        # Intranet mode: force OpenAI-compatible routing for internal endpoints.
+        if selected == "intranet":
+            provider_cfg = config.providers.openai
+            if not (provider_cfg and provider_cfg.api_key) and not model.startswith("bedrock/"):
+                raise ValueError("Intranet provider requires API key.")
+            return LiteLLMProvider(
+                api_key=provider_cfg.api_key if provider_cfg else None,
+                api_base=provider_cfg.api_base if provider_cfg else None,
+                default_model=model,
+                extra_headers=provider_cfg.extra_headers if provider_cfg else None,
                 provider_name="openai",
             )
 
-        if selected and selected != "custom" and hasattr(config.providers, selected):
+        if selected and selected not in {"custom", "intranet"} and hasattr(config.providers, selected):
             provider_cfg = getattr(config.providers, selected)
             if not (provider_cfg and provider_cfg.api_key) and not model.startswith("bedrock/"):
                 raise ValueError("No API key configured for selected provider.")
@@ -889,7 +906,7 @@ class WebUIRuntime:
         if selected not in self._provider_options():
             selected = config.get_provider_name(model) or "openrouter"
 
-        if selected == "custom":
+        if selected in {"custom", "intranet"}:
             provider_cfg = config.providers.openai
         else:
             provider_cfg = getattr(config.providers, selected, None)
@@ -900,7 +917,7 @@ class WebUIRuntime:
             "providerOptions": self._provider_options(),
             "model": model,
             "apiKey": provider_cfg.api_key if provider_cfg else "",
-            "apiBase": provider_cfg.api_base if provider_cfg and selected == "custom" else "",
+            "apiBase": provider_cfg.api_base if provider_cfg and selected in {"custom", "intranet"} else "",
             "restrictToWorkspace": bool(config.tools.restrict_to_workspace),
             "webhookCallbackUrl": webhook_cfg.callback_url,
             "webhookTimeoutSeconds": webhook_cfg.timeout_seconds,
@@ -927,7 +944,7 @@ class WebUIRuntime:
 
             config.ui.selected_provider = provider_name
 
-            if provider_name == "custom":
+            if provider_name in {"custom", "intranet"}:
                 provider_cfg = config.providers.openai
                 if "apiBase" in payload:
                     api_base = str(payload.get("apiBase") or "").strip()
