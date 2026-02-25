@@ -154,6 +154,24 @@ class LiteLLMProvider(LLMProvider):
 
         return " | ".join(parts)
 
+    def _status_code(self, err: Exception) -> int | None:
+        response = getattr(err, "response", None)
+        if response is None:
+            return None
+        status = getattr(response, "status_code", None)
+        try:
+            return int(status) if status is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _can_retry_without_tools(self, err: Exception, tools_used: bool) -> bool:
+        """Retry once without tools for OpenAI-compatible intranet endpoints."""
+        if not tools_used:
+            return False
+        if not (self.provider_name == "openai" and self.api_base):
+            return False
+        return self._status_code(err) == 400
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -207,6 +225,15 @@ class LiteLLMProvider(LLMProvider):
             response = await acompletion(**kwargs)
             return self._parse_response(response)
         except Exception as e:
+            if self._can_retry_without_tools(e, tools_used=bool(tools)):
+                retry_kwargs = dict(kwargs)
+                retry_kwargs.pop("tools", None)
+                retry_kwargs.pop("tool_choice", None)
+                try:
+                    response = await acompletion(**retry_kwargs)
+                    return self._parse_response(response)
+                except Exception as retry_err:
+                    e = retry_err
             # Return error as content for graceful handling
             return LLMResponse(
                 content=f"Error calling LLM: {self._format_error(e)}",
