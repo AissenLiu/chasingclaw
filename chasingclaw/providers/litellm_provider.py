@@ -99,6 +99,29 @@ class LiteLLMProvider(LLMProvider):
                     kwargs.update(overrides)
                     return
     
+    def _format_error(self, err: Exception) -> str:
+        """Format provider errors with HTTP status/body when available."""
+        parts: list[str] = [str(err)]
+
+        response = getattr(err, "response", None)
+        if response is not None:
+            status = getattr(response, "status_code", None)
+            if status is not None:
+                parts.append(f"status={status}")
+
+            try:
+                body = response.text
+            except Exception:
+                body = ""
+
+            if body:
+                body = body.strip()
+                if len(body) > 800:
+                    body = body[:800] + "...(truncated)"
+                parts.append(f"body={body}")
+
+        return " | ".join(parts)
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -154,7 +177,7 @@ class LiteLLMProvider(LLMProvider):
         except Exception as e:
             # Return error as content for graceful handling
             return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
+                content=f"Error calling LLM: {self._format_error(e)}",
                 finish_reason="error",
             )
     
