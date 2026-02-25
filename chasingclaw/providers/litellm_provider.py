@@ -8,7 +8,7 @@ import litellm
 from litellm import acompletion
 
 from chasingclaw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from chasingclaw.providers.registry import find_by_model, find_gateway
+from chasingclaw.providers.registry import find_by_model, find_by_name, find_gateway
 
 
 class LiteLLMProvider(LLMProvider):
@@ -31,6 +31,7 @@ class LiteLLMProvider(LLMProvider):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        self.provider_name = (provider_name or "").strip().lower()
         
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -51,7 +52,11 @@ class LiteLLMProvider(LLMProvider):
     
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
-        spec = self._gateway or find_by_model(model)
+        spec = self._gateway
+        if not spec and self.provider_name:
+            spec = find_by_name(self.provider_name)
+        if not spec:
+            spec = find_by_model(model)
         if not spec:
             return
 
@@ -72,6 +77,13 @@ class LiteLLMProvider(LLMProvider):
     
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
+        # Custom OpenAI-compatible endpoints should keep model routing explicit.
+        # If user did not provide a prefix, force openai/ so LiteLLM hits chat/completions.
+        if self.provider_name == "openai" and self.api_base:
+            if "/" in model:
+                return model
+            return f"openai/{model}"
+
         if self._gateway:
             # Gateway mode: apply gateway prefix, skip provider-specific prefixes
             prefix = self._gateway.litellm_prefix

@@ -746,7 +746,7 @@ class WebUIRuntime:
                 api_base=provider_cfg.api_base if provider_cfg else None,
                 default_model=model,
                 extra_headers=provider_cfg.extra_headers if provider_cfg else None,
-                provider_name=None,
+                provider_name="openai",
             )
 
         if selected and selected != "custom" and hasattr(config.providers, selected):
