@@ -247,11 +247,15 @@ localStorage.setItem(KEY, sessionId);
 const el = (id) => document.getElementById(id);
 const chatLog = el('chatLog');
 const DEFAULT_PROVIDER_OPTIONS = ['openrouter', 'openai', 'anthropic', 'deepseek', 'custom', 'intranet'];
-const PROVIDER_LABELS = {
-  intranet: 'intranet（内网模型 / OpenAI兼容）',
-};
 let webhookEventCursor = 0;
 let webhookPollTimer = null;
+
+function providerLabel(name) {
+  if (name === 'intranet') {
+    return 'intranet (OpenAI-compatible)';
+  }
+  return name;
+}
 
 function formatMessageTime(value) {
   if (!value) return new Date().toLocaleTimeString();
@@ -360,7 +364,7 @@ function setProviderOptions(options, selected) {
   for (const p of options) {
     const option = document.createElement('option');
     option.value = p;
-    option.textContent = PROVIDER_LABELS[p] || p;
+    option.textContent = providerLabel(p);
     provider.appendChild(option);
   }
 
