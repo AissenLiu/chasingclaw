@@ -84,6 +84,7 @@ $pyInstallerArgs = @(
   "--distpath", $PyDistDir,
   "--paths", $ProjectRoot,
   "--collect-data", "chasingclaw",
+  "--collect-data", "litellm",
   $EntryScript
 )
 

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import argparse
-
-from chasingclaw.webui.server import WebUIServer
+import os
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +18,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # In offline/private networks avoid remote fetch at import-time.
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    from chasingclaw.webui.server import WebUIServer
+
     args = build_parser().parse_args()
     server = WebUIServer(host=args.host, port=args.port)
     server.serve(open_browser=args.open)
