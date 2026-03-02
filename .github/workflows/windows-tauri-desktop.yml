@@ -1,0 +1,57 @@
+name: windows-tauri-desktop-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "chasingclaw/**"
+      - "desktop/tauri/**"
+      - "scripts/windows/build-portable.*"
+      - "scripts/windows/build-tauri-desktop.*"
+      - "scripts/windows/portable_ui_entry.py"
+      - "pyproject.toml"
+      - ".github/workflows/windows-tauri-desktop.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Build Tauri desktop package
+        shell: pwsh
+        run: |
+          ./scripts/windows/build-tauri-desktop.ps1 -Clean
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chasingclaw-tauri-desktop-windows
+          path: |
+            desktop/tauri/src-tauri/target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 14

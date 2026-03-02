@@ -276,6 +276,99 @@ class LiteLLMProvider(LLMProvider):
                 finish_reason="error",
             )
     
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ):
+        """
+        Stream a chat completion. Yields str tokens during text generation,
+        then yields LLMResponse as the final item (with tool_calls if any).
+        """
+        from typing import AsyncGenerator
+        model = self._resolve_model(model or self.default_model)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        self._apply_model_overrides(model, kwargs)
+        # Remove stream from overrides if model doesn't support it
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.extra_headers:
+            kwargs["extra_headers"] = self.extra_headers
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        try:
+            stream = await acompletion(**kwargs)
+            content_parts: list[str] = []
+            # accumulate tool call deltas: id -> {name, arguments}
+            tool_call_map: dict[int, dict] = {}
+
+            async for chunk in stream:
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    continue
+                delta = choice.delta
+
+                # Accumulate tool call fragments
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_call_map:
+                            tool_call_map[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc_delta.id:
+                            tool_call_map[idx]["id"] += tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_call_map[idx]["name"] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_call_map[idx]["arguments"] += tc_delta.function.arguments
+                    continue
+
+                # Stream text tokens
+                text = getattr(delta, "content", None)
+                if text:
+                    content_parts.append(text)
+                    yield text
+
+            # Build final response
+            tool_calls = []
+            for idx in sorted(tool_call_map):
+                entry = tool_call_map[idx]
+                args = entry["arguments"]
+                try:
+                    args = json.loads(args) if args else {}
+                except json.JSONDecodeError:
+                    args = {"raw": args}
+                tool_calls.append(ToolCallRequest(
+                    id=entry["id"],
+                    name=entry["name"],
+                    arguments=args,
+                ))
+            yield LLMResponse(
+                content="".join(content_parts) or None,
+                tool_calls=tool_calls,
+                finish_reason="tool_calls" if tool_calls else "stop",
+            )
+        except Exception as e:
+            # Yield error as final LLMResponse
+            yield LLMResponse(
+                content=self._format_error(e, context={"model": model}),
+                finish_reason="error",
+            )
+
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""
         choice = response.choices[0]

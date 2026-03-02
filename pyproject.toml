@@ -64,6 +64,7 @@ packages = ["chasingclaw"]
 [tool.hatch.build]
 include = [
     "chasingclaw/**/*.py",
+    "chasingclaw/**/*.html",
     "chasingclaw/skills/**/*.md",
     "chasingclaw/skills/**/*.sh",
 ]

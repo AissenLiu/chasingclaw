@@ -1,6 +1,7 @@
 """Agent loop: the core processing engine."""
 
 import asyncio
+import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -106,6 +107,12 @@ class AgentLoop:
         # Cron tool (for scheduling)
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+
+    def _clip_trace_text(self, value: Any, limit: int = 1200) -> str:
+        text = str(value).strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit] + "...(truncated)"
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -187,6 +194,7 @@ class AgentLoop:
         # Agent loop
         iteration = 0
         final_content = None
+        trace_events: list[dict[str, Any]] = []
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -200,6 +208,14 @@ class AgentLoop:
             
             # Handle tool calls
             if response.has_tool_calls:
+                trace_events.append(
+                    {
+                        "type": "tool_plan",
+                        "iteration": iteration,
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "summary": f"第 {iteration} 轮：模型计划调用 {len(response.tool_calls)} 个工具",
+                    }
+                )
                 # Add assistant message with tool calls
                 tool_call_dicts = [
                     {
@@ -220,13 +236,45 @@ class AgentLoop:
                 # Execute tools
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    trace_events.append(
+                        {
+                            "type": "tool_call",
+                            "iteration": iteration,
+                            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            "tool": tool_call.name,
+                            "callId": tool_call.id,
+                            "arguments": self._clip_trace_text(args_str, limit=2000),
+                            "summary": f"调用工具 {tool_call.name}",
+                        }
+                    )
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    is_error = str(result).startswith("Error")
+                    trace_events.append(
+                        {
+                            "type": "tool_result",
+                            "iteration": iteration,
+                            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            "tool": tool_call.name,
+                            "callId": tool_call.id,
+                            "status": "error" if is_error else "ok",
+                            "result": self._clip_trace_text(result, limit=3000),
+                            "summary": f"{tool_call.name} 执行{'失败' if is_error else '完成'}",
+                        }
+                    )
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
             else:
                 # No tool calls, we're done
+                trace_events.append(
+                    {
+                        "type": "assistant_final",
+                        "iteration": iteration,
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "summary": f"第 {iteration} 轮：模型直接返回最终回答",
+                    }
+                )
                 final_content = response.content
                 break
         
@@ -237,16 +285,27 @@ class AgentLoop:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
         
-        # Save to session
-        session.add_message("user", msg.content)
-        session.add_message("assistant", final_content)
+        # Save to session. For Web UI, allow a shorter display message while keeping
+        # full prompt payload in LLM context.
+        display_content = str(msg.metadata.get("displayContent") or msg.content)
+        attachments = msg.metadata.get("attachments")
+        user_kwargs: dict[str, Any] = {}
+        if isinstance(attachments, list) and attachments:
+            user_kwargs["attachments"] = attachments
+        session.add_message("user", display_content, **user_kwargs)
+        session.add_message("assistant", final_content, trace=trace_events)
         self.sessions.save(session)
         
+        outbound_metadata = dict(msg.metadata or {})
+        outbound_metadata["trace"] = trace_events
+        if attachments:
+            outbound_metadata["attachments"] = attachments
+
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            metadata=msg.metadata or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
+            metadata=outbound_metadata,  # Keep channel metadata and tool execution trace.
         )
     
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
@@ -354,6 +413,7 @@ class AgentLoop:
         session_key: str = "cli:direct",
         channel: str = "cli",
         chat_id: str = "direct",
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -376,8 +436,209 @@ class AgentLoop:
             channel=channel,
             sender_id="user",
             chat_id=chat_id,
-            content=content
+            content=content,
+            metadata=metadata or {},
         )
         
         response = await self._process_message(msg)
         return response.content if response else ""
+
+    async def process_direct_with_result(
+        self,
+        content: str,
+        session_key: str = "cli:direct",
+        channel: str = "cli",
+        chat_id: str = "direct",
+        metadata: dict[str, Any] | None = None,
+    ) -> OutboundMessage | None:
+        """Process a direct message and return the full outbound payload."""
+        if session_key and ":" in session_key:
+            sk_channel, sk_chat_id = session_key.split(":", 1)
+            channel = sk_channel or channel
+            chat_id = sk_chat_id or chat_id
+
+        msg = InboundMessage(
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            metadata=metadata or {},
+        )
+        return await self._process_message(msg)
+
+    async def process_direct_streaming(
+        self,
+        content: str,
+        session_key: str = "webui:direct",
+        channel: str = "webui",
+        chat_id: str = "direct",
+        metadata: dict[str, Any] | None = None,
+    ):
+        """
+        Process a direct message with streaming output.
+        Yields dicts:
+          {"type": "tool_call",   "tool": ..., "callId": ..., "arguments": ...}
+          {"type": "tool_result", "tool": ..., "callId": ..., "status": "ok"|"error", "result": ...}
+          {"type": "token",       "text": ...}
+          {"type": "done",        "reply": ..., "trace": [...]}
+        """
+        if session_key and ":" in session_key:
+            sk_channel, sk_chat_id = session_key.split(":", 1)
+            channel = sk_channel or channel
+            chat_id = sk_chat_id or chat_id
+
+        session = self.sessions.get_or_create(session_key)
+
+        # Update tool contexts
+        for tool_name, ctx_channel, ctx_chat_id in [
+            ("message", channel, chat_id),
+            ("spawn", channel, chat_id),
+            ("cron", channel, chat_id),
+        ]:
+            t = self.tools.get(tool_name)
+            if t and hasattr(t, "set_context"):
+                t.set_context(ctx_channel, ctx_chat_id)
+
+        msg = InboundMessage(
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            metadata=metadata or {},
+        )
+
+        messages = self.context.build_messages(
+            history=session.get_history(),
+            current_message=msg.content,
+            media=msg.media if hasattr(msg, "media") and msg.media else None,
+            channel=channel,
+            chat_id=chat_id,
+        )
+
+        iteration = 0
+        final_content = None
+        trace_events: list[dict[str, Any]] = []
+        has_stream = hasattr(self.provider, "chat_stream")
+
+        while iteration < self.max_iterations:
+            iteration += 1
+
+            if has_stream:
+                # --- streaming call ---
+                llm_response: LLMResponse | None = None
+                content_buf: list[str] = []
+
+                async for item in self.provider.chat_stream(
+                    messages=messages,
+                    tools=self.tools.get_definitions(),
+                    model=self.model,
+                ):
+                    if isinstance(item, str):
+                        content_buf.append(item)
+                        yield {"type": "token", "text": item}
+                    else:
+                        llm_response = item
+
+                if llm_response is None:
+                    llm_response = LLMResponse(content="".join(content_buf) or None)
+            else:
+                # Fallback: non-streaming
+                llm_response = await self.provider.chat(
+                    messages=messages,
+                    tools=self.tools.get_definitions(),
+                    model=self.model,
+                )
+
+            if llm_response.has_tool_calls:
+                trace_events.append({
+                    "type": "tool_plan",
+                    "iteration": iteration,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "summary": f"第 {iteration} 轮：模型计划调用 {len(llm_response.tool_calls)} 个工具",
+                })
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                    }
+                    for tc in llm_response.tool_calls
+                ]
+                messages = self.context.add_assistant_message(
+                    messages, llm_response.content, tool_call_dicts,
+                    reasoning_content=llm_response.reasoning_content,
+                )
+
+                for tool_call in llm_response.tool_calls:
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    trace_event = {
+                        "type": "tool_call",
+                        "iteration": iteration,
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "tool": tool_call.name,
+                        "callId": tool_call.id,
+                        "arguments": self._clip_trace_text(args_str, limit=2000),
+                        "summary": f"调用工具 {tool_call.name}",
+                    }
+                    trace_events.append(trace_event)
+                    yield {
+                        "type": "tool_call",
+                        "tool": tool_call.name,
+                        "callId": tool_call.id,
+                        "arguments": self._clip_trace_text(args_str, limit=500),
+                        "summary": f"调用工具 {tool_call.name}",
+                    }
+
+                    logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    is_error = str(result).startswith("Error")
+
+                    result_event = {
+                        "type": "tool_result",
+                        "iteration": iteration,
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "tool": tool_call.name,
+                        "callId": tool_call.id,
+                        "status": "error" if is_error else "ok",
+                        "result": self._clip_trace_text(result, limit=3000),
+                        "summary": f"{tool_call.name} 执行{'失败' if is_error else '完成'}",
+                    }
+                    trace_events.append(result_event)
+                    yield {
+                        "type": "tool_result",
+                        "tool": tool_call.name,
+                        "callId": tool_call.id,
+                        "status": "error" if is_error else "ok",
+                        "result": self._clip_trace_text(result, limit=500),
+                    }
+                    messages = self.context.add_tool_result(
+                        messages, tool_call.id, tool_call.name, result
+                    )
+            else:
+                trace_events.append({
+                    "type": "assistant_final",
+                    "iteration": iteration,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "summary": f"第 {iteration} 轮：模型直接返回最终回答",
+                })
+                final_content = llm_response.content
+                break
+
+        if final_content is None:
+            final_content = "I've completed processing but have no response to give."
+
+        # Save session
+        display_content = str((metadata or {}).get("displayContent") or content)
+        attachments = (metadata or {}).get("attachments")
+        user_kwargs: dict[str, Any] = {}
+        if isinstance(attachments, list) and attachments:
+            user_kwargs["attachments"] = attachments
+        session.add_message("user", display_content, **user_kwargs)
+        session.add_message("assistant", final_content, trace=trace_events)
+        self.sessions.save(session)
+
+        yield {"type": "done", "reply": final_content, "trace": trace_events}
+

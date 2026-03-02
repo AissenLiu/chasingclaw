@@ -116,6 +116,48 @@ chasingclaw-portable-ui.bat restart
 
 - 进入 Actions 对应任务，在 `Artifacts` 下载 `chasingclaw-portable-windows`
 
+## Windows Tauri 桌面客户端（免 Python 运行时）
+
+如果你要一个更像桌面软件的交付方式（安装后点图标启动），项目已加入 Tauri 壳层方案：
+
+- 桌面壳：`desktop/tauri`
+- 内置 sidecar：`chasingclaw-ui.exe`（由 PyInstaller 产出）
+- 启动方式：桌面壳进程自动拉起 sidecar，再打开 `http://127.0.0.1:18789`
+
+### 打包机要求（仅构建机需要）
+
+- Python `>= 3.11`
+- Node.js LTS（建议 `>= 20`）与 `npm`
+- Rust stable（建议通过 `rustup` 安装）
+- Windows C++ 构建工具（Visual Studio Build Tools）
+
+### 一键构建
+
+在项目根目录执行：
+
+```bat
+scripts\windows\build-tauri-desktop.bat -Clean
+```
+
+说明：
+
+- 脚本会先构建 `chasingclaw-ui.exe`，再复制到 Tauri sidecar 目录并执行 `tauri build`
+- `tauri.conf.json` 已配置 `offlineInstaller`，安装包会携带 WebView2 离线安装器，减少目标机依赖
+
+产物目录：
+
+- `desktop\tauri\src-tauri\target\release\bundle`
+
+### GitHub Actions 自动打包（可选）
+
+已提供工作流：
+
+- `.github/workflows/windows-tauri-desktop.yml`
+
+产物名称：
+
+- `chasingclaw-tauri-desktop-windows`
+
 ## Windows 一键后台启动
 
 已提供脚本：
@@ -182,6 +224,8 @@ scripts\windows\chasingclaw-startup-task.bat remove
 | `scripts/windows/chasingclaw-startup-task.ps1` | 使用 `schtasks` 安装/删除/查看/立即运行开机自启任务 |
 | `scripts/windows/build-portable.bat` | 免安装绿色版打包入口 |
 | `scripts/windows/build-portable.ps1` | 使用 PyInstaller `--onedir` 构建绿色版目录（可选打 zip） |
+| `scripts/windows/build-tauri-desktop.bat` | Tauri 桌面客户端一键打包入口 |
+| `scripts/windows/build-tauri-desktop.ps1` | 先构建 Python sidecar，再执行 Tauri 打包 |
 | `scripts/windows/portable_ui_entry.py` | 绿色版 `chasingclaw-ui.exe` 的入口脚本 |
 | `scripts/windows/portable/chasingclaw-portable-ui.bat` | 绿色版运行脚本模板（会复制到 `dist/chasingclaw-portable`） |
 | `scripts/windows/portable/chasingclaw-portable-ui.ps1` | 绿色版后台管理模板脚本 |

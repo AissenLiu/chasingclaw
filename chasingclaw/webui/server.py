@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import json
 import os
+from pathlib import Path
 import secrets
 import socket
 import threading
@@ -28,676 +29,7 @@ from chasingclaw.providers.registry import PROVIDERS, find_by_name
 from chasingclaw.session.manager import SessionManager
 
 
-UI_HTML = """<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>chasingclaw UI</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-    .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 420px 1fr; gap: 16px; }
-    .card { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 14px; }
-    h1 { margin: 0 0 8px; font-size: 20px; }
-    h2 { margin: 0 0 10px; font-size: 15px; }
-    h3 { margin: 12px 0 8px; font-size: 13px; color: #93c5fd; }
-    label { display: block; margin: 10px 0 5px; font-size: 12px; color: #94a3b8; }
-    input, select, textarea, button {
-      width: 100%; box-sizing: border-box; border-radius: 8px; border: 1px solid #334155;
-      background: #0b1220; color: #e2e8f0; padding: 10px; font-size: 13px;
-    }
-    textarea { min-height: 72px; resize: vertical; }
-    button { background: #2563eb; border: 0; cursor: pointer; font-weight: 600; margin-top: 8px; }
-    button:hover { background: #1d4ed8; }
-    button.secondary { background: #475569; }
-    button.teal { background: #0f766e; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .chat-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-    .chat-log {
-      height: 60vh; overflow-y: auto; background: #020617; border-radius: 8px;
-      padding: 12px; border: 1px solid #1e293b; display: flex; flex-direction: column; gap: 8px;
-    }
-    .chat-row { display: flex; }
-    .chat-row.user { justify-content: flex-end; }
-    .chat-row.assistant { justify-content: flex-start; }
-    .chat-row.system { justify-content: center; }
-    .msg {
-      max-width: 82%; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap;
-      word-break: break-word; border: 1px solid transparent;
-    }
-    .msg.user { background: #1e3a8a; border-color: #1d4ed8; }
-    .msg.assistant { background: #064e3b; border-color: #047857; }
-    .msg.system { max-width: 96%; background: #1f2937; border-color: #334155; color: #cbd5e1; font-size: 12px; }
-    .msg.pending { opacity: 0.75; font-style: italic; }
-    .msg-meta { margin-top: 6px; font-size: 11px; color: #cbd5e1; opacity: 0.7; text-align: right; }
-    .msg-meta.system { text-align: left; }
-    .inline-btn { width: auto; margin-top: 0; padding: 6px 10px; }
-    .status { font-size: 12px; color: #94a3b8; margin-top: 8px; }
-    .hint { font-size: 11px; color: #94a3b8; margin-top: 6px; }
-    .check-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-    .check-row input { width: auto; }
-    .cron-list { margin-top: 10px; border: 1px solid #1e293b; border-radius: 8px; overflow: hidden; }
-    .cron-head, .cron-item { display: grid; grid-template-columns: 0.9fr 1fr 1fr 1.8fr; gap: 8px; padding: 8px 10px; align-items: center; }
-    .cron-head { background: #0b1220; font-size: 12px; color: #94a3b8; }
-    .cron-item { border-top: 1px solid #1e293b; font-size: 12px; }
-    .cron-actions { display: flex; gap: 6px; }
-    .cron-actions button { margin-top: 0; padding: 6px 8px; font-size: 12px; }
-    @media (max-width: 980px) { .wrap { grid-template-columns: 1fr; } }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <h1>chasingclaw</h1>
-      <h2>模型 / Webhook / 运行配置</h2>
-
-      <h3>模型配置</h3>
-      <label>Provider</label>
-      <select id="provider"></select>
-
-      <label>Model</label>
-      <input id="model" placeholder="如 anthropic/claude-opus-4-5" />
-
-      <label>API Base URL</label>
-      <input id="apiBase" placeholder="可选，例如 http://localhost:8000/v1" />
-
-      <label>API Key</label>
-      <input id="apiKey" type="password" placeholder="输入后点击保存" />
-
-      <h3>智慧财信Webhook配置</h3>
-      <label>智慧财信机器人webhook地址</label>
-      <input id="webhookCallbackUrl" placeholder="例如 https://your-im-server/webhook" />
-
-      <label>用于配置智慧财信机器人的webhook回调地址</label>
-      <input id="inboundWebhookUrl" readonly />
-
-      <button id="advancedToggleBtn" type="button" class="secondary">高级配置</button>
-
-      <div id="advancedSection" style="display:none;">
-        <h3>运行配置</h3>
-        <div class="check-row">
-          <input id="restrictToWorkspace" type="checkbox" />
-          <label for="restrictToWorkspace" style="margin:0;">Restrict tools to workspace</label>
-        </div>
-
-        <div class="row">
-          <div>
-            <label>Webhook Timeout (秒)</label>
-            <input id="webhookTimeoutSeconds" type="number" min="1" step="1" />
-          </div>
-          <div>
-            <label>回复消息类型</label>
-            <select id="webhookMessageType">
-              <option value="text">text</option>
-              <option value="markdown">markdown</option>
-              <option value="link">link</option>
-            </select>
-          </div>
-        </div>
-
-        <label>消息模板（支持 {reply} 占位符）</label>
-        <textarea id="webhookMessageTemplate" placeholder="默认: {reply}"></textarea>
-
-        <div class="row">
-          <div>
-            <label>link.title</label>
-            <input id="webhookLinkTitle" placeholder="chasingclaw 回复" />
-          </div>
-          <div>
-            <label>link.btnTitle</label>
-            <input id="webhookLinkButtonTitle" placeholder="查看详情" />
-          </div>
-        </div>
-
-        <label>link.messageUrl（可选）</label>
-        <input id="webhookLinkMessageUrl" placeholder="例如 https://your-site/details" />
-
-        <h3>签名配置（可选）</h3>
-        <div class="row">
-          <div>
-            <label>签名 key</label>
-            <input id="webhookSignKey" placeholder="Authorization 的 key" />
-          </div>
-          <div>
-            <label>签名 secret</label>
-            <input id="webhookSignSecret" type="password" placeholder="Authorization 签名 secret" />
-          </div>
-        </div>
-        <div class="hint">配置后将自动携带 Content-Md5 / Content-Type / DATE / Authorization 请求头。</div>
-      </div>
-
-      <button id="saveBtn">保存配置</button>
-      <div class="status" id="cfgStatus"></div>
-    </div>
-
-    <div class="card">
-      <h2>Chat</h2>
-      <div class="chat-toolbar">
-        <div class="status" id="sessionInfo" style="margin-top:0;"></div>
-        <button id="clearChatBtn" type="button" class="secondary inline-btn">清空窗口</button>
-      </div>
-      <div class="chat-log" id="chatLog"></div>
-      <div class="row" style="margin-top:10px;">
-        <input id="message" placeholder="输入消息，Enter发送" />
-        <button id="sendBtn">发送</button>
-      </div>
-      <div class="row" style="margin-top:8px;">
-        <button id="newSessionBtn" class="secondary">新会话</button>
-        <button id="webhookTestBtn" class="teal">测试智慧财信发送</button>
-      </div>
-      <div class="status" id="chatStatus"></div>
-    </div>
-
-    <div class="card" id="cronCard" style="display:none;">
-      <h2>Cron 定时任务</h2>
-      <div class="row">
-        <div>
-          <label>任务名称</label>
-          <input id="cronName" placeholder="例如 每日巡检" />
-        </div>
-        <div>
-          <label>计划类型</label>
-          <select id="cronScheduleType">
-            <option value="every">every（每隔秒）</option>
-            <option value="cron">cron 表达式</option>
-            <option value="at">at（一次性）</option>
-          </select>
-        </div>
-      </div>
-
-      <label>任务消息（交给 AI 执行）</label>
-      <textarea id="cronMessage" placeholder="例如 请总结今天项目进展"></textarea>
-
-      <div class="row">
-        <div>
-          <label>every 秒数</label>
-          <input id="cronEverySeconds" type="number" min="1" step="1" value="3600" />
-        </div>
-        <div>
-          <label>cron 表达式</label>
-          <input id="cronExpr" placeholder="例如 0 9 * * *" />
-        </div>
-      </div>
-
-      <label>at 时间（本地时间）</label>
-      <input id="cronAt" type="datetime-local" />
-
-      <div class="row" style="margin-top:8px;">
-        <button id="cronAddBtn">新增任务</button>
-        <button id="cronRefreshBtn" class="secondary">刷新列表</button>
-      </div>
-
-      <div class="status" id="cronStatus"></div>
-      <div class="cron-list" id="cronList"></div>
-    </div>
-  </div>
-
-<script>
-const KEY = 'chasingclaw_webui_session_id';
-
-function createSessionId() {
-  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
-    return window.crypto.randomUUID();
-  }
-  return 'sid-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-}
-
-let sessionId = localStorage.getItem(KEY) || createSessionId();
-localStorage.setItem(KEY, sessionId);
-
-const el = (id) => document.getElementById(id);
-const chatLog = el('chatLog');
-const DEFAULT_PROVIDER_OPTIONS = ['openrouter', 'openai', 'anthropic', 'deepseek', 'custom', 'intranet'];
-let webhookEventCursor = 0;
-let webhookPollTimer = null;
-
-function providerLabel(name) {
-  if (name === 'intranet') {
-    return 'intranet (OpenAI-compatible)';
-  }
-  return name;
-}
-
-function formatMessageTime(value) {
-  if (!value) return new Date().toLocaleTimeString();
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return new Date().toLocaleTimeString();
-  return d.toLocaleTimeString();
-}
-
-function appendMessage(role, text, options = {}) {
-  const roleClass = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'system';
-
-  const row = document.createElement('div');
-  row.className = 'chat-row ' + roleClass;
-
-  const bubble = document.createElement('div');
-  bubble.className = 'msg ' + roleClass;
-  if (options.pending) {
-    bubble.classList.add('pending');
-  }
-
-  const content = document.createElement('div');
-  content.textContent = text || '';
-  bubble.appendChild(content);
-
-  const meta = document.createElement('div');
-  meta.className = 'msg-meta ' + roleClass;
-  meta.textContent = formatMessageTime(options.timestamp);
-  bubble.appendChild(meta);
-
-  row.appendChild(bubble);
-  chatLog.appendChild(row);
-  chatLog.scrollTop = chatLog.scrollHeight;
-  return row;
-}
-
-function escapeHtml(text) {
-  return String(text || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-async function api(path, options = {}) {
-  const opts = { ...options };
-  opts.headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    let message = data.error || ('HTTP ' + res.status);
-    if (data.detail) {
-      try {
-        message += '\\n' + JSON.stringify(data.detail, null, 2);
-      } catch (_) {
-        message += '\\n' + String(data.detail);
-      }
-    }
-    throw new Error(message);
-  }
-  return data;
-}
-
-function setSessionInfo() {
-  el('sessionInfo').textContent = 'Session: ' + sessionId;
-}
-
-function isApiBaseProvider() {
-  const provider = el('provider').value;
-  return provider === 'custom' || provider === 'intranet';
-}
-
-function updateApiBaseState() {
-  const input = el('apiBase');
-  const enabled = isApiBaseProvider();
-  input.disabled = !enabled;
-  if (!enabled) {
-    input.value = '';
-    input.placeholder = '仅 custom / intranet 可填写';
-  } else {
-    input.placeholder = '例如 http://localhost:8000/v1';
-  }
-}
-
-function updateWebhookMessageTypeState() {
-  const isLink = el('webhookMessageType').value === 'link';
-  el('webhookLinkTitle').disabled = !isLink;
-  el('webhookLinkMessageUrl').disabled = !isLink;
-  el('webhookLinkButtonTitle').disabled = !isLink;
-}
-
-function updateCronScheduleInputs() {
-  const scheduleType = el('cronScheduleType').value;
-  el('cronEverySeconds').disabled = scheduleType !== 'every';
-  el('cronExpr').disabled = scheduleType !== 'cron';
-  el('cronAt').disabled = scheduleType !== 'at';
-}
-
-function setAdvancedVisible(visible) {
-  el('advancedSection').style.display = visible ? 'block' : 'none';
-  el('cronCard').style.display = visible ? 'block' : 'none';
-  el('advancedToggleBtn').textContent = visible ? '收起高级配置' : '高级配置';
-}
-
-function toggleAdvanced() {
-  const showing = el('advancedSection').style.display !== 'none';
-  setAdvancedVisible(!showing);
-}
-
-function setProviderOptions(options, selected) {
-  const provider = el('provider');
-  provider.innerHTML = '';
-
-  for (const p of options) {
-    const option = document.createElement('option');
-    option.value = p;
-    option.textContent = providerLabel(p);
-    provider.appendChild(option);
-  }
-
-  const providerValue = selected || options[0] || 'openrouter';
-  if (![...provider.options].some((o) => o.value === providerValue) && providerValue) {
-    const option = document.createElement('option');
-    option.value = providerValue;
-    option.textContent = providerValue;
-    provider.appendChild(option);
-  }
-
-  provider.value = providerValue;
-  updateApiBaseState();
-}
-
-async function loadConfig() {
-  const data = await api('/api/config');
-  const options = (data.providerOptions && data.providerOptions.length)
-    ? data.providerOptions
-    : DEFAULT_PROVIDER_OPTIONS;
-  setProviderOptions(options, data.provider || options[0] || 'openrouter');
-
-  el('model').value = data.model || '';
-  if (isApiBaseProvider()) {
-    el('apiBase').value = data.apiBase || '';
-  }
-  el('apiKey').value = data.apiKey || '';
-  el('restrictToWorkspace').checked = !!data.restrictToWorkspace;
-
-  el('webhookCallbackUrl').value = data.webhookCallbackUrl || '';
-  el('inboundWebhookUrl').value = data.inboundWebhookUrl || (window.location.origin + '/api/webhook/request');
-  el('webhookTimeoutSeconds').value = data.webhookTimeoutSeconds || 15;
-  el('webhookSignKey').value = data.webhookSignKey || '';
-  el('webhookSignSecret').value = data.webhookSignSecret || '';
-
-  el('webhookMessageType').value = data.webhookMessageType || 'text';
-  el('webhookMessageTemplate').value = data.webhookMessageTemplate || '{reply}';
-  el('webhookLinkTitle').value = data.webhookLinkTitle || 'chasingclaw 回复';
-  el('webhookLinkMessageUrl').value = data.webhookLinkMessageUrl || '';
-  el('webhookLinkButtonTitle').value = data.webhookLinkButtonTitle || '查看详情';
-  updateWebhookMessageTypeState();
-
-  el('cfgStatus').textContent = '配置已加载';
-}
-
-function formatWebhookEvent(event) {
-  if (!event) {
-    return '[Webhook] 收到空事件';
-  }
-
-  let text = '[Webhook] ' + (event.summary || event.event || '收到事件');
-  if (event.detail) {
-    try {
-      text += '\\n' + JSON.stringify(event.detail, null, 2);
-    } catch (err) {
-      text += '\\n(detail parse failed)';
-    }
-  }
-  return text;
-}
-
-async function loadWebhookEvents(options = {}) {
-  const reset = !!options.reset;
-  const since = reset ? 0 : webhookEventCursor;
-  const limit = reset ? 30 : 80;
-  const data = await api('/api/webhook/events?since=' + encodeURIComponent(String(since)) + '&limit=' + encodeURIComponent(String(limit)));
-
-  for (const event of data.events || []) {
-    appendMessage('system', formatWebhookEvent(event), { timestamp: event.timestamp });
-    const eventId = Number(event.id || 0);
-    if (eventId > webhookEventCursor) {
-      webhookEventCursor = eventId;
-    }
-  }
-
-  const lastId = Number(data.lastId || 0);
-  if (lastId > webhookEventCursor) {
-    webhookEventCursor = lastId;
-  }
-}
-
-function startWebhookEventPolling() {
-  if (webhookPollTimer) {
-    clearInterval(webhookPollTimer);
-  }
-
-  webhookPollTimer = window.setInterval(async () => {
-    try {
-      await loadWebhookEvents();
-    } catch (err) {
-      // Keep silent for temporary polling errors.
-    }
-  }, 2500);
-}
-
-async function loadHistory() {
-  chatLog.innerHTML = '';
-  const data = await api('/api/history?sessionId=' + encodeURIComponent(sessionId));
-  for (const item of data.messages || []) {
-    if (item.role === 'user' || item.role === 'assistant') {
-      appendMessage(item.role === 'user' ? 'user' : 'assistant', item.content || '', { timestamp: item.timestamp });
-    }
-  }
-
-  webhookEventCursor = 0;
-  await loadWebhookEvents({ reset: true });
-}
-
-async function saveConfig() {
-  el('cfgStatus').textContent = '保存中...';
-  const payload = {
-    provider: el('provider').value,
-    model: el('model').value,
-    apiKey: el('apiKey').value,
-    apiBase: isApiBaseProvider() ? el('apiBase').value : '',
-    restrictToWorkspace: el('restrictToWorkspace').checked,
-    webhookCallbackUrl: el('webhookCallbackUrl').value,
-    webhookTimeoutSeconds: Number(el('webhookTimeoutSeconds').value || 15),
-    webhookSignKey: el('webhookSignKey').value,
-    webhookSignSecret: el('webhookSignSecret').value,
-    webhookMessageType: el('webhookMessageType').value,
-    webhookMessageTemplate: el('webhookMessageTemplate').value,
-    webhookLinkTitle: el('webhookLinkTitle').value,
-    webhookLinkMessageUrl: el('webhookLinkMessageUrl').value,
-    webhookLinkButtonTitle: el('webhookLinkButtonTitle').value,
-  };
-  await api('/api/config', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-  el('cfgStatus').textContent = '保存成功';
-}
-
-async function sendChat() {
-  const input = el('message');
-  const message = input.value.trim();
-  if (!message) return;
-  input.value = '';
-  appendMessage('user', message);
-
-  const pendingRow = appendMessage('assistant', '正在思考中...', { pending: true });
-  el('chatStatus').textContent = '思考中...';
-
-  try {
-    const data = await api('/api/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message, sessionId: sessionId })
-    });
-    pendingRow.remove();
-    appendMessage('assistant', data.reply || '');
-    el('chatStatus').textContent = '';
-  } catch (err) {
-    pendingRow.remove();
-    appendMessage('assistant', 'Error: ' + err.message);
-    el('chatStatus').textContent = '发送失败';
-  }
-}
-
-async function testWebhook() {
-  const input = el('message');
-  const message = (input.value || 'chasingclaw 智慧财信联通测试').trim();
-  const pendingRow = appendMessage('assistant', '正在发送智慧财信测试消息...', { pending: true });
-  el('chatStatus').textContent = '正在向智慧财信机器人发送测试消息...';
-  try {
-    const data = await api('/api/webhook/zhcx-test-send', {
-      method: 'POST',
-      body: JSON.stringify({ message }),
-    });
-    pendingRow.remove();
-    appendMessage('assistant', '[智慧财信测试] 已发送：' + message);
-    if (data.result) {
-      appendMessage('assistant', '[智慧财信测试返回] ' + JSON.stringify(data.result));
-    }
-    el('chatStatus').textContent = '智慧财信测试发送完成';
-  } catch (err) {
-    pendingRow.remove();
-    appendMessage('assistant', '智慧财信测试失败: ' + err.message);
-    el('chatStatus').textContent = '智慧财信测试失败';
-  }
-}
-
-function formatCronTime(ts) {
-  if (!ts) return '-';
-  const d = new Date(ts);
-  return d.toLocaleString();
-}
-
-function scheduleText(job) {
-  if (job.scheduleKind === 'every') return 'every ' + (job.everySeconds || 0) + 's';
-  if (job.scheduleKind === 'cron') return job.cronExpr || '';
-  if (job.scheduleKind === 'at') return job.atIso || '';
-  return '';
-}
-
-function clearChatWindow() {
-  chatLog.innerHTML = '';
-  el('chatStatus').textContent = '';
-}
-
-async function loadCronJobs() {
-  const data = await api('/api/cron/jobs?all=1');
-  const jobs = data.jobs || [];
-  const container = el('cronList');
-
-  let html = '<div class="cron-head"><div>ID</div><div>任务</div><div>计划</div><div>操作</div></div>';
-  if (!jobs.length) {
-    html += '<div class="cron-item"><div>-</div><div>暂无任务</div><div>-</div><div>-</div></div>';
-  } else {
-    for (const j of jobs) {
-      const status = j.enabled ? '启用' : '禁用';
-      const meta = status + ' / next: ' + formatCronTime(j.nextRunAtMs);
-      html += '<div class="cron-item">' +
-        '<div>' + escapeHtml(j.id) + '</div>' +
-        '<div>' + escapeHtml(j.name) + '<div class="hint">' + escapeHtml(meta) + '</div></div>' +
-        '<div>' + escapeHtml(scheduleText(j)) + '</div>' +
-        '<div class="cron-actions">' +
-          '<button class="secondary" data-act="toggle" data-id="' + escapeHtml(j.id) + '" data-enabled="' + (j.enabled ? '1' : '0') + '">' + (j.enabled ? '禁用' : '启用') + '</button>' +
-          '<button class="teal" data-act="run" data-id="' + escapeHtml(j.id) + '">执行</button>' +
-          '<button data-act="remove" data-id="' + escapeHtml(j.id) + '">删除</button>' +
-        '</div>' +
-      '</div>';
-    }
-  }
-
-  container.innerHTML = html;
-}
-
-async function addCronJob() {
-  el('cronStatus').textContent = '保存任务中...';
-  const payload = {
-    name: el('cronName').value.trim() || '新任务',
-    message: el('cronMessage').value.trim(),
-    scheduleType: el('cronScheduleType').value,
-    everySeconds: Number(el('cronEverySeconds').value || 0),
-    cronExpr: el('cronExpr').value.trim(),
-    atTime: el('cronAt').value,
-  };
-  if (!payload.message) {
-    el('cronStatus').textContent = '任务消息不能为空';
-    return;
-  }
-  try {
-    await api('/api/cron/jobs', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    el('cronStatus').textContent = '任务已创建';
-    await loadCronJobs();
-  } catch (err) {
-    el('cronStatus').textContent = '创建失败: ' + err.message;
-  }
-}
-
-async function onCronAction(e) {
-  const btn = e.target.closest('button[data-act]');
-  if (!btn) return;
-  const action = btn.getAttribute('data-act');
-  const jobId = btn.getAttribute('data-id');
-  try {
-    if (action === 'toggle') {
-      const enabled = btn.getAttribute('data-enabled') !== '1';
-      await api('/api/cron/toggle', { method: 'POST', body: JSON.stringify({ jobId, enabled }) });
-      el('cronStatus').textContent = enabled ? '任务已启用' : '任务已禁用';
-    } else if (action === 'remove') {
-      await api('/api/cron/remove', { method: 'POST', body: JSON.stringify({ jobId }) });
-      el('cronStatus').textContent = '任务已删除';
-    } else if (action === 'run') {
-      await api('/api/cron/run', { method: 'POST', body: JSON.stringify({ jobId, force: true }) });
-      el('cronStatus').textContent = '任务已执行';
-    }
-    await loadCronJobs();
-  } catch (err) {
-    el('cronStatus').textContent = '操作失败: ' + err.message;
-  }
-}
-
-el('saveBtn').addEventListener('click', saveConfig);
-el('provider').addEventListener('change', updateApiBaseState);
-el('advancedToggleBtn').addEventListener('click', toggleAdvanced);
-el('webhookMessageType').addEventListener('change', updateWebhookMessageTypeState);
-el('sendBtn').addEventListener('click', sendChat);
-el('webhookTestBtn').addEventListener('click', testWebhook);
-el('clearChatBtn').addEventListener('click', clearChatWindow);
-el('newSessionBtn').addEventListener('click', async () => {
-  sessionId = createSessionId();
-  localStorage.setItem(KEY, sessionId);
-  setSessionInfo();
-  await loadHistory();
-});
-el('message').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') sendChat();
-});
-
-el('cronScheduleType').addEventListener('change', updateCronScheduleInputs);
-el('cronAddBtn').addEventListener('click', addCronJob);
-el('cronRefreshBtn').addEventListener('click', loadCronJobs);
-el('cronList').addEventListener('click', onCronAction);
-
-(async () => {
-  try {
-    setAdvancedVisible(false);
-    setSessionInfo();
-    await loadConfig();
-    await loadHistory();
-    updateCronScheduleInputs();
-    await loadCronJobs();
-    startWebhookEventPolling();
-  } catch (err) {
-    el('cfgStatus').textContent = '配置加载失败：' + (err.message || String(err));
-    // Fallback: keep provider selector/inbound callback usable even if /api/config fails.
-    setProviderOptions(DEFAULT_PROVIDER_OPTIONS, 'openrouter');
-    el('inboundWebhookUrl').value = window.location.origin + '/api/webhook/request';
-    try {
-      await loadWebhookEvents({ reset: true });
-    } catch (_) {
-      // Ignore fallback polling bootstrap failures.
-    }
-    startWebhookEventPolling();
-  }
-})();
-</script>
-</body>
-</html>
-"""
+UI_HTML = (Path(__file__).with_name("ui.html")).read_text(encoding="utf-8")
 
 
 class WebUIRuntime:
@@ -1012,7 +344,15 @@ class WebUIRuntime:
 
         return self.load_ui_config()
 
-    async def _chat_once_async(self, message: str, session_id: str, channel: str) -> str:
+    async def _chat_once_async(
+        self,
+        message: str,
+        session_id: str,
+        channel: str,
+        *,
+        display_message: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         config = load_config()
         provider = self._make_provider(config)
         bus = MessageBus()
@@ -1029,12 +369,29 @@ class WebUIRuntime:
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
         )
-        return await agent.process_direct(
+        metadata: dict[str, Any] = {}
+        if display_message:
+            metadata["displayContent"] = display_message
+        if attachments:
+            metadata["attachments"] = attachments
+
+        outbound = await agent.process_direct_with_result(
             content=message,
             session_key=f"{channel}:{session_id}",
             channel=channel,
             chat_id=session_id,
+            metadata=metadata,
         )
+        reply = outbound.content if outbound else ""
+        trace = []
+        if outbound and isinstance(outbound.metadata, dict):
+            raw_trace = outbound.metadata.get("trace")
+            if isinstance(raw_trace, list):
+                trace = raw_trace
+        return {
+            "reply": reply,
+            "trace": trace,
+        }
 
     def chat(self, payload: dict[str, Any], channel: str = "webui") -> dict[str, Any]:
         message = str(payload.get("message") or "").strip()
@@ -1042,13 +399,45 @@ class WebUIRuntime:
             raise ValueError("message is required")
 
         session_id = str(payload.get("sessionId") or secrets.token_hex(8)).strip()
-        reply = asyncio.run(self._chat_once_async(message, session_id, channel))
+        display_message = str(payload.get("displayMessage") or "").strip() or None
+        raw_attachments = payload.get("attachments")
+        attachments: list[dict[str, Any]] = []
+        if isinstance(raw_attachments, list):
+            for item in raw_attachments[:10]:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                size = item.get("size")
+                ftype = str(item.get("type") or "").strip()
+                if not name:
+                    continue
+                clean_item: dict[str, Any] = {"name": name}
+                if isinstance(size, int):
+                    clean_item["size"] = size
+                elif isinstance(size, float):
+                    clean_item["size"] = int(size)
+                if ftype:
+                    clean_item["type"] = ftype
+                attachments.append(clean_item)
+
+        run_result = asyncio.run(
+            self._chat_once_async(
+                message,
+                session_id,
+                channel,
+                display_message=display_message,
+                attachments=attachments or None,
+            )
+        )
         history = self.get_history(session_id, channel)
+        reply = str(run_result.get("reply") or "")
+        trace = run_result.get("trace") if isinstance(run_result, dict) else []
 
         return {
             "sessionId": session_id,
             "reply": reply,
             "history": history,
+            "trace": trace if isinstance(trace, list) else [],
         }
 
     def get_history(self, session_id: str, channel: str = "webui") -> list[dict[str, Any]]:
@@ -1062,9 +451,65 @@ class WebUIRuntime:
                     "role": item.get("role", "assistant"),
                     "content": item.get("content", ""),
                     "timestamp": item.get("timestamp", ""),
+                    "trace": item.get("trace", []) if isinstance(item.get("trace"), list) else [],
+                    "attachments": item.get("attachments", []) if isinstance(item.get("attachments"), list) else [],
                 }
             )
         return messages
+
+    def list_sessions(self, channel: str = "webui", limit: int = 200) -> dict[str, Any]:
+        config = load_config()
+        session_manager = SessionManager(config.workspace_path)
+        sessions = session_manager.list_sessions()
+        items: list[dict[str, Any]] = []
+        prefix = f"{channel}:"
+
+        for meta in sessions:
+            key = str(meta.get("key") or "")
+            if not key.startswith(prefix):
+                continue
+
+            session_id = key.split(":", 1)[1] if ":" in key else key
+            session = session_manager.get_or_create(key)
+
+            title = ""
+            for msg in session.messages:
+                if msg.get("role") != "user":
+                    continue
+                content = str(msg.get("content") or "").strip()
+                if content:
+                    title = self._clip(content, limit=60)
+                    break
+            if not title:
+                title = f"会话 {session_id[:8]}"
+
+            preview = ""
+            if session.messages:
+                preview = self._clip(str(session.messages[-1].get("content") or ""), limit=90)
+
+            updated_at = str(meta.get("updated_at") or "")
+            items.append(
+                {
+                    "sessionId": session_id,
+                    "key": key,
+                    "title": title,
+                    "preview": preview,
+                    "updatedAt": updated_at,
+                    "messageCount": len(session.messages),
+                }
+            )
+            if len(items) >= limit:
+                break
+
+        items.sort(key=lambda x: x.get("updatedAt") or "", reverse=True)
+        return {"sessions": items}
+
+    def remove_session(self, session_id: str, channel: str = "webui") -> dict[str, Any]:
+        config = load_config()
+        session_manager = SessionManager(config.workspace_path)
+        key = f"{channel}:{session_id}"
+        deleted = session_manager.delete(key)
+        return {"success": deleted, "sessionId": session_id}
 
     def _post_json(
         self,
@@ -1591,6 +1036,21 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/sessions":
+            query = parse_qs(parsed.query)
+            channel = (query.get("channel") or ["webui"])[0].strip() or "webui"
+            try:
+                limit = int((query.get("limit") or ["200"])[0] or 200)
+            except ValueError:
+                self._send_json(400, {"error": "invalid query parameter"})
+                return
+            limit = max(1, min(limit, 500))
+            try:
+                self._send_json(200, self.runtime.list_sessions(channel=channel, limit=limit))
+            except Exception as exc:
+                self._send_json(500, {"error": str(exc)})
+            return
+
         if parsed.path == "/api/cron/jobs":
             include_disabled = (parse_qs(parsed.query).get("all") or ["1"])[0].strip() != "0"
             try:
@@ -1618,6 +1078,63 @@ class _WebUIHandler(BaseHTTPRequestHandler):
                 detail={"client": self.client_address[0] if self.client_address else ""},
             )
             self._send_json(200, {"result": "ok"})
+            return
+
+        if parsed.path == "/api/memory/list":
+            from pathlib import Path
+            workspace_dir = Path(__file__).resolve().parent.parent.parent / "workspace"
+            mem_files = []
+            if workspace_dir.exists():
+                mem_files.extend(list(workspace_dir.glob("*.md")))
+            mem_dir = workspace_dir / "memory"
+            if mem_dir.exists():
+                mem_files.extend(list(mem_dir.glob("*.md")))
+            
+            items = []
+            import datetime
+            for f in sorted(list(set(mem_files)), key=lambda x: x.stat().st_mtime, reverse=True):
+                mtime = datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat()
+                items.append({
+                    "name": f.name if f.parent == workspace_dir else f"memory/{f.name}",
+                    "path": str(f.resolve()),
+                    "size": f.stat().st_size,
+                    "updated_at": mtime
+                })
+            self._send_json(200, {"files": items})
+            return
+
+        if parsed.path == "/api/skills/list":
+            from pathlib import Path
+            query = parse_qs(parsed.query)
+            skills_dir = Path(__file__).resolve().parent.parent / "skills"
+            req_dir = query.get("dir", [None])[0]
+            
+            items = []
+            import datetime
+            if req_dir:
+                target_dir = skills_dir / req_dir
+                if target_dir.exists() and target_dir.is_dir():
+                    for f in sorted(target_dir.iterdir(), key=lambda x: x.name):
+                        if f.is_file():
+                            mtime = datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat()
+                            items.append({
+                                "name": f.name,
+                                "path": str(f.resolve()),
+                                "is_dir": False,
+                                "updated_at": mtime
+                            })
+            else:
+                if skills_dir.exists():
+                    for f in sorted(skills_dir.iterdir(), key=lambda x: x.name):
+                        if f.name == ".DS_Store": continue
+                        mtime = datetime.datetime.fromtimestamp(f.stat().st_mtime).isoformat()
+                        items.append({
+                            "name": f.name,
+                            "path": str(f.resolve()),
+                            "is_dir": f.is_dir(),
+                            "updated_at": mtime
+                        })
+            self._send_json(200, {"skills": items})
             return
 
         self._send_json(404, {"error": "not found"})
@@ -1649,6 +1166,107 @@ class _WebUIHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/chat":
                 result = self.runtime.chat(payload, channel="webui")
                 self._send_json(200, result)
+                return
+
+            if parsed.path == "/api/chat/stream":
+                message = str(payload.get("message") or "").strip()
+                if not message:
+                    self._send_json(400, {"error": "message is required"})
+                    return
+                session_id = str(payload.get("sessionId") or secrets.token_hex(8)).strip()
+                display_message = str(payload.get("displayMessage") or "").strip() or None
+                raw_attachments = payload.get("attachments")
+                attachments: list[dict[str, Any]] = []
+                if isinstance(raw_attachments, list):
+                    for item in raw_attachments[:10]:
+                        if isinstance(item, dict) and item.get("name"):
+                            attachments.append({k: item[k] for k in ("name", "size", "type") if k in item})
+
+                config = load_config()
+                provider = self.runtime._make_provider(config)
+                bus = MessageBus()
+                session_manager = SessionManager(config.workspace_path)
+                agent = AgentLoop(
+                    bus=bus,
+                    provider=provider,
+                    workspace=config.workspace_path,
+                    model=config.agents.defaults.model,
+                    max_iterations=config.agents.defaults.max_tool_iterations,
+                    brave_api_key=config.tools.web.search.api_key or None,
+                    exec_config=config.tools.exec,
+                    restrict_to_workspace=config.tools.restrict_to_workspace,
+                    session_manager=session_manager,
+                )
+                metadata: dict[str, Any] = {}
+                if display_message:
+                    metadata["displayContent"] = display_message
+                if attachments:
+                    metadata["attachments"] = attachments
+
+                # Send SSE headers
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+
+                def send_sse(data: dict) -> bool:
+                    try:
+                        line = "data: " + json.dumps(data, ensure_ascii=False) + "\n\n"
+                        self.wfile.write(line.encode("utf-8"))
+                        self.wfile.flush()
+                        return True
+                    except (BrokenPipeError, ConnectionResetError):
+                        return False
+
+                async def run_stream():
+                    async for event in agent.process_direct_streaming(
+                        content=message,
+                        session_key=f"webui:{session_id}",
+                        channel="webui",
+                        chat_id=session_id,
+                        metadata=metadata,
+                    ):
+                        if not send_sse(event):
+                            break
+                        if event.get("type") == "done":
+                            break
+
+                try:
+                    asyncio.run(run_stream())
+                except Exception as exc:
+                    send_sse({"type": "error", "message": str(exc)})
+                return
+
+            if parsed.path == "/api/sessions/remove":
+                session_id = str(payload.get("sessionId", "")).strip()
+                if not session_id:
+                    self._send_json(400, {"error": "sessionId is required"})
+                    return
+                result = self.runtime.remove_session(session_id, channel="webui")
+                self._send_json(200, result)
+                return
+
+            if parsed.path == "/api/files/read":
+                from pathlib import Path
+                filepath = Path(payload.get("path", ""))
+                if filepath.exists() and filepath.is_file():
+                    content = filepath.read_text(encoding="utf-8")
+                    self._send_json(200, {"content": content})
+                else:
+                    self._send_json(404, {"error": "file not found"})
+                return
+
+            if parsed.path == "/api/files/save":
+                from pathlib import Path
+                filepath = Path(payload.get("path", ""))
+                content = payload.get("content", "")
+                if filepath.exists() and filepath.is_file():
+                    filepath.write_text(content, encoding="utf-8")
+                    self._send_json(200, {"result": "ok"})
+                else:
+                    self._send_json(404, {"error": "file not found"})
                 return
 
             if parsed.path == "/api/cron/jobs":

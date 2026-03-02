@@ -19,3 +19,5 @@ poetry.lock
 .pytest_cache/
 botpy.log
 .DS_Store
+desktop/tauri/node_modules/
+desktop/tauri/src-tauri/target/

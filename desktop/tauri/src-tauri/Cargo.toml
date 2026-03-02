@@ -1,0 +1,17 @@
+[package]
+name = "chasingclaw-desktop"
+version = "0.1.0"
+description = "chasingclaw desktop shell powered by Tauri"
+authors = ["chasingclaw"]
+edition = "2021"
+rust-version = "1.75"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.6", features = ["shell-execute", "shell-sidecar"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
